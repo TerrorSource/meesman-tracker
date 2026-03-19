@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card">
+  <h2 style="margin:0 0 12px">Configuratie</h2>
+
+  {% if request.query_params.get('saved') == '1' %}
+    <p class="ok"><strong>✓ Opgeslagen</strong></p>
+  {% endif %}
+  {% if request.query_params.get('tg_test') == '1' %}
+    <p class="ok"><strong>✓ Telegram testbericht verzonden</strong></p>
+  {% elif request.query_params.get('tg_err') == '1' %}
+    <p class="err"><strong>✗ Telegram test mislukt.</strong> Controleer bot-token en chat-ID.</p>
+  {% endif %}
+  {% if request.query_params.get('error') == 'no_key' %}
+    <p class="err"><strong>Fout:</strong> Genereer eerst een master key.</p>
+  {% endif %}
+
+  <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+    <span>
+      Master key:
+      {% if cfg.has_key %}
+        <strong class="ok">✓ aanwezig</strong>
+      {% else %}
+        <strong class="err">✗ ontbreekt</strong>
+      {% endif %}
+    </span>
+
+    {% if not cfg.has_key %}
+      <form method="post" action="/config/generate-key" style="display:inline">
+        <button type="submit" class="primary">Genereer key</button>
+      </form>
+      <small>Sla een Fernet-sleutel op in <code>/data/config.yaml</code>.</small>
+    {% endif %}
+
+    <form method="post" action="/config/test-telegram" style="display:inline; margin-left:auto">
+      <button type="submit" {% if not cfg.has_key %}disabled{% endif %}>✉️ Test Telegram</button>
+    </form>
+  </div>
+</div>
+
+<form method="post" action="/config/save">
+  <!-- ── Inloggegevens ── -->
+  <div class="card">
+    <h3 style="margin:0 0 4px">Inloggegevens</h3>
+    <div class="grid">
+      <div>
+        <label>Gebruikersnaam</label>
+        <input name="username" value="{{ cfg.username or '' }}" autocomplete="off" />
+      </div>
+      <div>
+        <label>Wachtwoord <small>(leeg laten om huidig te bewaren)</small></label>
+        <input name="password" type="password" value="{{ '********' if cfg.password_set else '' }}" autocomplete="new-password" />
+      </div>
+    </div>
+  </div>
+
+  <!-- ── MFA ── -->
+  <div class="card">
+    <h3 style="margin:0 0 8px">MFA-methode</h3>
+
+    <div style="display:flex; gap:20px; margin-bottom:14px; flex-wrap:wrap;">
+      <label style="margin:0; font-weight:normal; display:flex; gap:6px; align-items:center; cursor:pointer;">
+        <input type="radio" name="mfa_mode" value="totp" id="mfa_totp"
+          {{ 'checked' if cfg.mfa_mode == 'totp' else '' }} style="width:auto" />
+        🔑 TOTP (automatisch — aanbevolen)
+      </label>
+      <label style="margin:0; font-weight:normal; display:flex; gap:6px; align-items:center; cursor:pointer;">
+        <input type="radio" name="mfa_mode" value="manual" id="mfa_manual"
+          {{ 'checked' if cfg.mfa_mode == 'manual' else '' }} style="width:auto" />
+        ✍️ Handmatige code (eenmalig)
+      </label>
+      <label style="margin:0; font-weight:normal; display:flex; gap:6px; align-items:center; cursor:pointer;">
+        <input type="radio" name="mfa_mode" value="none" id="mfa_none"
+          {{ 'checked' if cfg.mfa_mode == 'none' else '' }} style="width:auto" />
+        ⊘ Geen MFA
+      </label>
+    </div>
+
+    <div id="section_totp" style="display:none">
+      <label>TOTP-geheim (base32, bijv. uit je authenticator-app)</label>
+      <input name="totp_secret" value="{{ cfg.totp_secret or '' }}" autocomplete="off"
+             placeholder="JBSWY3DPEHPK3PXP" />
+      <small>
+        Met TOTP genereert de app de code automatisch — geen handmatige invoer meer nodig.
+        Vind het geheim in Meesman bij het instellen van 2FA (toon QR als tekst).
+      </small>
+    </div>
+
+    <div id="section_manual" style="display:none">
+      <label>Handmatige MFA-code</label>
+      <input name="manual_mfa_code" value="{{ cfg.manual_mfa_code or '' }}" autocomplete="off" />
+      <small>
+        ⚠️ Codes verlopen snel (~30 sec). Voer een <em>verse</em> code in vlak voordat je
+        op <strong>Opslaan</strong> klikt en daarna direct op <strong>↻ Refresh nu</strong>.
+      </small>
+    </div>
+  </div>
+
+  <!-- ── Intervallen ── -->
+  <div class="card">
+    <h3 style="margin:0 0 4px">Intervallen</h3>
+    <div class="grid">
+      <div>
+        <label>Refresh-interval (uren)</label>
+        <input name="refresh_hours" type="number" min="1" max="168" value="{{ cfg.refresh_hours or 24 }}" />
+        <small>Hoe vaak de saldi worden opgehaald. Standaard: 24 uur.</small>
+      </div>
+      <div>
+        <label>Keepalive-interval (minuten)</label>
+        <input name="keepalive_minutes" type="number" min="5" max="120" value="{{ cfg.keepalive_minutes or 30 }}" />
+        <small>Houdt de sessie actief zodat je minder vaak opnieuw hoeft in te loggen. Standaard: 30 min.</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Telegram ── -->
+  <div class="card">
+    <h3 style="margin:0 0 4px">Telegram</h3>
+    <small style="display:block; margin-bottom:10px">
+      Je ontvangt een bericht bij saldo-wijziging én wanneer de sessie verloopt.
+    </small>
+    <div class="grid">
+      <div>
+        <label>Bot-token</label>
+        <input name="telegram_bot_token" value="{{ cfg.telegram_bot_token or '' }}"
+               placeholder="123456:ABC-..." autocomplete="off" />
+      </div>
+      <div>
+        <label>Chat-ID</label>
+        <input name="telegram_chat_id" value="{{ cfg.telegram_chat_id or '' }}"
+               placeholder="-100123456789" autocomplete="off" />
+        <small>Gebruik een positief getal voor persoonlijk chat, negatief voor groep/kanaal.</small>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-bottom:24px;">
+    <button type="submit" class="primary" {% if not cfg.has_key %}disabled{% endif %}>
+      💾 Opslaan
+    </button>
+    {% if not cfg.has_key %}
+      <small class="err" style="margin-left:8px">Genereer eerst een master key.</small>
+    {% endif %}
+  </div>
+</form>
+
+<script>
+  const radios  = document.querySelectorAll('input[name="mfa_mode"]');
+  const secTotp = document.getElementById('section_totp');
+  const secMan  = document.getElementById('section_manual');
+
+  function updateMfaSections() {
+    const val = document.querySelector('input[name="mfa_mode"]:checked')?.value;
+    secTotp.style.display = val === 'totp'   ? '' : 'none';
+    secMan.style.display  = val === 'manual' ? '' : 'none';
+  }
+
+  radios.forEach(r => r.addEventListener('change', updateMfaSections));
+  updateMfaSections();
+</script>
+
+{% endblock %}

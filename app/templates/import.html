@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- ── Bestandsimport ── -->
+<div class="card">
+  <h2 style="margin:0 0 8px">Importeer export.json</h2>
+  <p style="margin:0; color:#555">
+    Upload één of meerdere <code>export.json</code> bestanden van eerdere exports.
+    Bestaande datapunten worden automatisch overgeslagen (op basis van tijdstip + rekeningnummer).
+  </p>
+</div>
+
+{% if results is defined %}
+  <div class="card">
+    <h3 style="margin:0 0 12px">
+      Resultaat —
+      <span class="ok">{{ total_inserted }} nieuw ingevoerd</span>,
+      <span style="color:#888">{{ total_skipped }} overgeslagen</span>
+    </h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Bestand</th>
+          <th style="text-align:right">Ingevoerd</th>
+          <th style="text-align:right">Overgeslagen</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        <tr>
+          <td><code>{{ r.file }}</code></td>
+          <td style="text-align:right">{% if not r.error %}<strong>{{ r.inserted }}</strong>{% else %}—{% endif %}</td>
+          <td style="text-align:right; color:#888">{% if not r.error %}{{ r.skipped }}{% else %}—{% endif %}</td>
+          <td>
+            {% if r.error %}<span class="err">✗ {{ r.error }}</span>
+            {% elif r.inserted == 0 %}<span style="color:#888">Niets nieuws</span>
+            {% else %}<span class="ok">✓</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if total_inserted > 0 %}
+      <p style="margin:14px 0 0"><a href="/" style="font-weight:600">→ Bekijk dashboard</a></p>
+    {% endif %}
+  </div>
+{% endif %}
+
+<div class="card">
+  <h3 style="margin:0 0 10px">Bestanden uploaden</h3>
+  <form method="post" action="/import" enctype="multipart/form-data">
+    <label>Selecteer export.json bestand(en)</label>
+    <input type="file" name="files" accept=".json,application/json" multiple style="margin-bottom:12px" />
+    <small style="display:block; margin-bottom:14px; color:#666">
+      Je kunt meerdere bestanden tegelijk selecteren (Ctrl+klik of Cmd+klik).
+      Dubbele datapunten worden automatisch overgeslagen.
+    </small>
+    <button type="submit" class="primary">📥 Importeer bestanden</button>
+  </form>
+</div>
+
+<hr style="margin: 8px 0">
+
+<!-- ── Handmatige invoer ── -->
+<div class="card">
+  <h3 style="margin:0 0 6px">Handmatig datapunt toevoegen</h3>
+  <p style="margin:0 0 14px; color:#555">
+    Voeg een historisch saldo toe op een specifieke datum — handig voor beginwaardes
+    of punten die niet in een export staan.
+  </p>
+
+  {% if manual_inserted is defined and manual_inserted == 1 %}
+    <p class="ok" style="margin-bottom:12px">
+      ✓ Toegevoegd: <strong>{{ manual_account }}</strong> op {{ manual_ts }} — € {{ "%.2f"|format(manual_value) }}
+      &nbsp;<a href="/" style="font-weight:600">→ Bekijk dashboard</a>
+    </p>
+  {% endif %}
+  {% if manual_error is defined %}
+    <p class="err" style="margin-bottom:12px">✗ {{ manual_error }}</p>
+  {% endif %}
+
+  <form method="post" action="/import/manual" id="manual-form">
+    <!-- Hidden input — always contains the final account number -->
+    <input type="hidden" name="account_number" id="acc-final" value="" />
+
+    <div class="grid">
+      <div>
+        <label>Rekening</label>
+        <select id="acc-select">
+          <option value="">— laden… —</option>
+        </select>
+        <div id="custom-wrap" style="display:none; margin-top:8px">
+          <input id="acc-custom" placeholder="Rekeningnummer, bijv. 22404586" autocomplete="off" />
+        </div>
+      </div>
+      <div>
+        <label>Label <small>(optioneel — wordt automatisch ingevuld bij bekende rekening)</small></label>
+        <input name="label" id="acc-label" placeholder="bijv. Beleggingen" autocomplete="off" />
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:4px">
+      <div>
+        <label>Datum</label>
+        <input name="entry_date" type="date" required id="entry-date" />
+      </div>
+      <div>
+        <label>Tijd <small>(wordt opgeslagen als UTC)</small></label>
+        <input name="entry_time" type="time" value="08:00" />
+      </div>
+    </div>
+
+    <div style="max-width:260px; margin-top:4px">
+      <label>Bedrag (€)</label>
+      <input name="value_eur" type="text" required placeholder="bijv. 4987,50" autocomplete="off" inputmode="decimal" />
+    </div>
+
+    <div style="margin-top:16px">
+      <button type="submit" class="primary">➕ Toevoegen</button>
+    </div>
+  </form>
+</div>
+
+<script>
+const sel      = document.getElementById("acc-select");
+const custom   = document.getElementById("acc-custom");
+const custWrap = document.getElementById("custom-wrap");
+const labelInp = document.getElementById("acc-label");
+const finalInp = document.getElementById("acc-final");
+const form     = document.getElementById("manual-form");
+
+// ── Laad bekende rekeningen ───────────────────────────────────────────────
+fetch("/api/accounts")
+  .then(r => r.json())
+  .then(accounts => {
+    sel.innerHTML = "";
+    accounts.forEach(a => {
+      const opt = document.createElement("option");
+      opt.value         = a.account_number;
+      opt.textContent   = `${a.label} (${a.account_number})`;
+      opt.dataset.label = a.label;
+      sel.appendChild(opt);
+    });
+    const newOpt = document.createElement("option");
+    newOpt.value       = "__new__";
+    newOpt.textContent = "➕ Nieuwe rekening invoeren…";
+    sel.appendChild(newOpt);
+
+    syncFinal();
+  })
+  .catch(() => {
+    sel.innerHTML = "<option value='__new__'>Voer rekeningnummer handmatig in</option>";
+    syncFinal();
+  });
+
+sel.addEventListener("change", () => {
+  const isNew = sel.value === "__new__";
+  custWrap.style.display  = isNew ? "" : "none";
+  if (!isNew) {
+    const opt = sel.options[sel.selectedIndex];
+    if (opt.dataset.label) labelInp.placeholder = opt.dataset.label;
+  }
+  syncFinal();
+});
+
+custom.addEventListener("input", syncFinal);
+
+// Always sync the hidden field before submit
+form.addEventListener("submit", (e) => {
+  syncFinal();
+  if (!finalInp.value.trim()) {
+    e.preventDefault();
+    alert("Voer een rekeningnummer in.");
+  }
+});
+
+function syncFinal() {
+  finalInp.value = sel.value === "__new__"
+    ? custom.value.trim()
+    : sel.value;
+}
+
+// ── Datum standaard op gisteren ──────────────────────────────────────────
+const dateInp   = document.getElementById("entry-date");
+const yesterday = new Date();
+yesterday.setDate(yesterday.getDate() - 1);
+dateInp.value = yesterday.toISOString().slice(0, 10);
+</script>
+
+
+<hr style="margin: 8px 0">
+
+<!-- ── Deposits.json import ── -->
+<div class="card">
+  <h3 style="margin:0 0 8px">Importeer deposits.json</h3>
+  <p style="margin:0 0 12px; color:#555">
+    Upload een eerder geëxporteerde <code>deposits.json</code> om inleggen te herstellen
+    na een nieuwe installatie. Duplicaten worden automatisch overgeslagen.
+  </p>
+
+  {% if dep_results is defined %}
+    <div style="margin-bottom:14px">
+      <strong>
+        <span class="ok">{{ dep_total_inserted }} inleggen geïmporteerd</span>,
+        <span style="color:#888">{{ dep_total_skipped }} overgeslagen</span>
+      </strong>
+      <table style="margin-top:8px">
+        <thead><tr><th>Bestand</th><th style="text-align:right">Ingevoerd</th><th style="text-align:right">Overgeslagen</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for r in dep_results %}
+          <tr>
+            <td><code>{{ r.file }}</code></td>
+            <td style="text-align:right">{% if not r.error %}<strong>{{ r.inserted }}</strong>{% else %}—{% endif %}</td>
+            <td style="text-align:right; color:#888">{% if not r.error %}{{ r.skipped }}{% else %}—{% endif %}</td>
+            <td>
+              {% if r.error %}<span class="err">✗ {{ r.error }}</span>
+              {% elif r.inserted == 0 %}<span style="color:#888">Niets nieuws</span>
+              {% else %}<span class="ok">✓</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if dep_total_inserted > 0 %}
+        <p style="margin:10px 0 0"><a href="/deposits" style="font-weight:600">→ Bekijk inleggen</a></p>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <form method="post" action="/import/deposits" enctype="multipart/form-data">
+    <label>Selecteer deposits.json bestand(en)</label>
+    <input type="file" name="files" accept=".json,application/json" multiple style="margin-bottom:12px" />
+    <small style="display:block; margin-bottom:14px; color:#666">
+      Het bestand staat in je <code>data/</code> map als <code>deposits.json</code>.
+      Download het ook via <a href="/deposits.json">↓ deposits.json</a>.
+    </small>
+    <button type="submit" class="primary">📥 Importeer inleggen</button>
+  </form>
+</div>
+
+{% endblock %}

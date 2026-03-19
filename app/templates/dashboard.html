@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card">
+  <h2 style="margin:0 0 12px">Dashboard</h2>
+
+  {% if last_refresh %}
+    <p style="margin:0">
+      <strong>Laatste refresh:</strong> {{ last_refresh.ts }}&nbsp;—&nbsp;
+      <strong>Status:</strong>
+      <span class="{{ 'ok' if last_refresh.status == 'ok' else 'err' }}">{{ last_refresh.status }}</span>
+      &nbsp;—&nbsp;<strong>Opgeslagen:</strong> {{ last_refresh.stored_rows }} rij(en)
+    </p>
+    {% if last_refresh.message %}
+      <p class="err" style="margin:6px 0 0"><strong>Reden:</strong> {{ last_refresh.message }}</p>
+    {% endif %}
+  {% else %}
+    <p style="margin:0"><strong>Laatste refresh:</strong> nog geen</p>
+  {% endif %}
+
+  <hr>
+
+  <p style="margin:0">
+    <strong>HA REST sensor:</strong>
+    <a href="/api/sensors"><code>/api/sensors</code></a> &nbsp;|&nbsp;
+    <a href="{{ export_path }}"><code>{{ export_path }}</code></a>
+    <br><small>Zie <code>/api/sensors/{rekeningnummer}</code> voor een enkel account.</small>
+  </p>
+</div>
+
+<div id="totaal-card" class="card" style="display:none">
+  <span id="totaal-value"></span>
+</div>
+
+<div id="charts"></div>
+
+<script>
+  window.__PAYLOAD__ = {{ payload_json | safe }};
+</script>
+<script src="/static/app.js"></script>
+{% endblock %}

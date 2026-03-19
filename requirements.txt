@@ -1,0 +1,12 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+jinja2==3.1.4
+python-multipart==0.0.9
+apscheduler==3.10.4
+cryptography==43.0.1
+pydantic==2.8.2
+playwright==1.46.0
+PyYAML==6.0.2
+sqlalchemy==2.0.34
+requests==2.32.3
+pyotp==2.9.0

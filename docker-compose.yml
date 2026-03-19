@@ -1,0 +1,13 @@
+services:
+  meesman-tracker:
+    build: .
+    container_name: meesman-tracker
+    ports:
+      - "8080:8080"
+    environment:
+      - TZ=Europe/Amsterdam
+      - DB_PATH=/data/app.db
+      - CONFIG_PATH=/data/config.yaml
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

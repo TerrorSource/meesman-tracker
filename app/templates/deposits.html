@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card">
+  <h2 style="margin:0 0 8px">Inleg bijhouden</h2>
+  <p style="margin:0; color:#555">
+    Registreer hier je cash stortingen per rekening. Dividend herbelegging hoef je
+    <strong>niet</strong> in te voeren — dat zit al verwerkt in de waarde.
+    <br>Het dashboard berekent op basis van deze inleg het <strong>echte rendement</strong>
+    (waarde − inleg).
+  </p>
+</div>
+
+{% if request.query_params.get('saved') == '1' %}
+  <div class="card" style="padding:10px 16px">
+    <span class="ok">✓ Inleg opgeslagen</span>
+  </div>
+{% endif %}
+{% if request.query_params.get('deleted') == '1' %}
+  <div class="card" style="padding:10px 16px">
+    <span class="ok">✓ Inleg verwijderd</span>
+  </div>
+{% endif %}
+{% if error is defined %}
+  <div class="card" style="padding:10px 16px">
+    <span class="err">✗ {{ error }}</span>
+  </div>
+{% endif %}
+
+<!-- ── Invoerformulier ── -->
+<div class="card">
+  <h3 style="margin:0 0 12px">Inleg toevoegen</h3>
+  <form method="post" action="/deposits/add">
+    <input type="hidden" name="account_number" id="acc-final" value="" />
+
+    <div class="grid">
+      <div>
+        <label>Rekening</label>
+        <select id="acc-select">
+          <option value="">— laden… —</option>
+        </select>
+        <div id="custom-wrap" style="display:none; margin-top:8px">
+          <input id="acc-custom" placeholder="Rekeningnummer, bijv. 22404586" autocomplete="off" />
+        </div>
+      </div>
+      <div>
+        <label>Datum</label>
+        <input name="entry_date" type="date" required id="entry-date" />
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top:4px">
+      <div>
+        <label>Bedrag inleg (€) <small>— gebruik komma: bijv. 4987,50</small></label>
+        <input name="amount_eur" type="text" required placeholder="bijv. 4987,50"
+               inputmode="decimal" autocomplete="off" />
+      </div>
+      <div>
+        <label>Omschrijving <small>(optioneel)</small></label>
+        <input name="note" type="text" placeholder="bijv. Maandelijkse inleg" autocomplete="off" />
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <button type="submit" class="primary">➕ Inleg toevoegen</button>
+    </div>
+  </form>
+</div>
+
+<!-- ── Overzicht ── -->
+{% if deposits %}
+<div class="card">
+  <h3 style="margin:0 0 12px">Alle inleggen</h3>
+
+  {% set ns = namespace(prev_acc='', acc_total=0) %}
+  <table>
+    <thead>
+      <tr>
+        <th>Datum</th>
+        <th>Rekening</th>
+        <th style="text-align:right">Bedrag</th>
+        <th>Omschrijving</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in deposits %}
+      <tr>
+        <td style="color:#555">{{ d.ts[:10] }}</td>
+        <td>{{ d.label }} <small style="color:#aaa">({{ d.account_number }})</small></td>
+        <td style="text-align:right; font-weight:600">
+          € {{ "{:,.2f}".format(d.amount_eur|float).replace(",", "X").replace(".", ",").replace("X", ".") }}
+        </td>
+        <td style="color:#666">{{ d.note or '' }}</td>
+        <td>
+          <form method="post" action="/deposits/delete/{{ d.id }}"
+                onsubmit="return confirm('Inleg verwijderen?')">
+            <button type="submit" style="background:none; border:none; cursor:pointer;
+                    color:#b00020; padding:2px 6px; font-size:13px">✕</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Totalen per rekening -->
+  <div style="margin-top:16px; border-top:1px solid #eee; padding-top:12px">
+    <strong>Totaal per rekening:</strong>
+    {% set totals = {} %}
+    {% for d in deposits %}
+      {% if d.account_number in totals %}
+        {% set _ = totals.update({d.account_number: totals[d.account_number] + d.amount_eur|float}) %}
+      {% else %}
+        {% set _ = totals.update({d.account_number: d.amount_eur|float}) %}
+      {% endif %}
+    {% endfor %}
+    <table style="margin-top:8px; max-width:400px">
+      {% for acc, total in totals.items() %}
+      <tr>
+        <td style="padding-right:16px">{{ acc }}</td>
+        <td style="font-weight:600; text-align:right">€ {{ "{:,.2f}".format(total).replace(",", "X").replace(".", ",").replace("X", ".") }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card" style="color:#888">
+  Nog geen inleggen geregistreerd.
+</div>
+{% endif %}
+
+<script>
+const sel      = document.getElementById("acc-select");
+const custom   = document.getElementById("acc-custom");
+const custWrap = document.getElementById("custom-wrap");
+const finalInp = document.getElementById("acc-final");
+const form     = document.querySelector("form");
+
+fetch("/api/accounts")
+  .then(r => r.json())
+  .then(accounts => {
+    sel.innerHTML = "";
+    accounts.forEach(a => {
+      const opt = document.createElement("option");
+      opt.value = a.account_number;
+      opt.textContent = `${a.label} (${a.account_number})`;
+      sel.appendChild(opt);
+    });
+    const newOpt = document.createElement("option");
+    newOpt.value = "__new__";
+    newOpt.textContent = "➕ Nieuwe rekening…";
+    sel.appendChild(newOpt);
+    syncFinal();
+  });
+
+sel.addEventListener("change", () => {
+  custWrap.style.display = sel.value === "__new__" ? "" : "none";
+  syncFinal();
+});
+custom.addEventListener("input", syncFinal);
+form.addEventListener("submit", (e) => {
+  syncFinal();
+  if (!finalInp.value.trim()) { e.preventDefault(); alert("Voer een rekeningnummer in."); }
+});
+function syncFinal() {
+  finalInp.value = sel.value === "__new__" ? custom.value.trim() : sel.value;
+}
+
+const dateInp = document.getElementById("entry-date");
+const yesterday = new Date();
+yesterday.setDate(yesterday.getDate() - 1);
+dateInp.value = yesterday.toISOString().slice(0, 10);
+</script>
+
+{% endblock %}

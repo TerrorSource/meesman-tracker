@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card">
+  <h2 style="margin:0 0 12px">Sessie &amp; Cookies</h2>
+  <p style="margin:0; color:#555">
+    Bekijk de opgeslagen browsersessie en cookie-vervaldatums.
+    Gebruik dit om te schatten wanneer je opnieuw moet inloggen.
+    <br><small>Gegenereerd op: {{ now_utc }}</small>
+  </p>
+</div>
+
+<!-- ── Sessiebestand ── -->
+<div class="card">
+  <h3 style="margin:0 0 10px">Playwright-sessiebestand</h3>
+  <table>
+    <tr>
+      <th style="width:160px">Pad</th>
+      <td><code>{{ session_path }}</code></td>
+    </tr>
+    <tr>
+      <th>Aanwezig</th>
+      <td>
+        {% if session_exists %}
+          <span class="ok">✓ ja</span>
+        {% else %}
+          <span class="err">✗ nee — voer een succesvolle refresh uit</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% if session_mtime %}
+    <tr>
+      <th>Laatste update</th>
+      <td>{{ session_mtime }}</td>
+    </tr>
+    {% endif %}
+  </table>
+</div>
+
+<!-- ── Cookie-samenvatting ── -->
+<div class="card">
+  <h3 style="margin:0 0 10px">Cookie-samenvatting</h3>
+
+  {% if not cookie_summary.exists %}
+    <p class="err">Geen cookie-dump gevonden. Voer eerst een succesvolle refresh uit.</p>
+  {% else %}
+    <table style="margin-bottom:12px">
+      <tr>
+        <th style="width:200px">Pad</th>
+        <td><code>{{ cookie_summary.path }}</code></td>
+      </tr>
+      <tr>
+        <th>Laatste update (UTC)</th>
+        <td>{{ cookie_summary.mtime or '—' }}</td>
+      </tr>
+      <tr>
+        <th>Aantal cookies</th>
+        <td>{{ cookie_summary.count }}</td>
+      </tr>
+      <tr>
+        <th>Vroegste vervaldatum</th>
+        <td>{{ cookie_summary.soonest_expires_at or '(geen)' }}</td>
+      </tr>
+      <tr>
+        <th>Laatste vervaldatum</th>
+        <td>{{ cookie_summary.latest_expires_at or '(geen)' }}</td>
+      </tr>
+    </table>
+
+    {% if cookie_summary.cookies %}
+    <h4 style="margin:12px 0 6px">Alle cookies</h4>
+    <table>
+      <thead>
+        <tr>
+          <th>Naam</th>
+          <th>Domein</th>
+          <th>Pad</th>
+          <th>Verloopt (UTC)</th>
+          <th>Over</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in cookie_summary.cookies %}
+        <tr>
+          <td><code>{{ c.name }}</code></td>
+          <td>{{ c.domain }}</td>
+          <td>{{ c.path }}</td>
+          <td>{{ c.expires_at or '' }}</td>
+          <td>{{ c.expires_in or '(sessie)' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  {% endif %}
+</div>
+
+<!-- ── Keepalive-geschiedenis ── -->
+<div class="card">
+  <h3 style="margin:0 0 6px">Keepalive-geschiedenis</h3>
+  <p style="margin:0 0 10px; color:#555">
+    Elke {{ keepalive_minutes }} minuten probeert de app de sessie actief te houden
+    zonder nieuwe data op te slaan.
+  </p>
+
+  {% if not keepalive_rows %}
+    <p><em>Nog geen keepalive-runs gelogd.</em></p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>Tijdstip (UTC)</th>
+          <th>Status</th>
+          <th>Bericht</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in keepalive_rows %}
+        <tr>
+          <td>{{ r.ts }}</td>
+          <td class="{{ 'ok' if r.status in ('ok', 'recovered') else 'err' }}">{{ r.status }}</td>
+          <td>{{ r.message or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+{% endblock %}

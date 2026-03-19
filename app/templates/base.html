@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Meesman Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body   { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #f5f5f5; color: #1a1a1a; }
+    .topbar { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 10px 20px; display: flex; gap: 16px; align-items: center; }
+    .topbar strong { font-size: 15px; }
+    .topbar a  { text-decoration: none; color: #0066cc; font-size: 14px; }
+    .topbar a:hover { text-decoration: underline; }
+    .topbar .push { margin-left: auto; }
+    .main  { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+    .card  { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; }
+    .grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+    canvas { max-width: 100%; }
+    label  { display: block; font-size: 13px; font-weight: 600; margin-top: 12px; margin-bottom: 4px; }
+    input, select { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; }
+    input:focus, select:focus { outline: 2px solid #0066cc; border-color: transparent; }
+    button { padding: 8px 14px; border-radius: 8px; border: 1px solid #ccc; background: #f0f0f0; cursor: pointer; font-size: 14px; }
+    button:hover { background: #e0e0e0; }
+    button.primary { background: #0066cc; color: #fff; border-color: #0052a3; }
+    button.primary:hover { background: #0052a3; }
+    small  { color: #666; font-size: 12px; }
+    .ok    { color: #0a7a0a; }
+    .err   { color: #b00020; }
+    code   { background: #f0f0f0; border-radius: 4px; padding: 1px 4px; font-size: 12px; }
+    table  { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
+    th     { font-weight: 600; background: #fafafa; }
+    hr     { border: none; border-top: 1px solid #e8e8e8; margin: 16px 0; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <strong>📊 Meesman Tracker</strong>
+    <a href="/">Dashboard</a>
+    <a href="/deposits">Inleg</a>
+    <a href="/import">Importeer</a>
+    <a href="/config">Config</a>
+    <a href="/session">Sessie</a>
+    <div class="push">
+      <form action="/refresh-now" method="post" style="display:inline">
+        <button type="submit" class="primary">↻ Refresh nu</button>
+      </form>
+    </div>
+  </div>
+  <div class="main">
+    {% block content %}{% endblock %}
+  </div>
+</body>
+</html>
