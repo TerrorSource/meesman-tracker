@@ -50,16 +50,16 @@ Open `http://localhost:8080/config` to complete setup.
 ```yaml
 services:
   meesman-tracker:
-    image: ghcr.io/TerrorSource/meesman-tracker:latest
+    image: ghcr.io/terrorsource/meesman-tracker:latest
     container_name: meesman-tracker
     ports:
-      - "8080:8080"
+      - "8060:8080"
     environment:
       - TZ=Europe/Amsterdam
       - DB_PATH=/data/app.db
       - CONFIG_PATH=/data/config.yaml
     volumes:
-      - /opt/meesman-tracker/data:/data
+      - /share/CACHEDEV1_DATA/Docker/meesman-tracker:/data
     restart: unless-stopped
 ```
 
