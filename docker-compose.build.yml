@@ -1,6 +1,9 @@
+# Use this file for local development (builds the image from source)
+# docker compose -f docker-compose.build.yml up -d --build
+
 services:
   meesman-tracker:
-    image: ghcr.io/TerrorSource/meesman-tracker:latest
+    build: .
     container_name: meesman-tracker
     ports:
       - "8080:8080"

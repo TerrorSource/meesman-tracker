@@ -24,10 +24,19 @@ A self-hosted Docker application that automatically logs into [mijn.meesman.nl](
 
 ### Docker Compose (recommended)
 
+No build required — the image is pulled automatically from GitHub Container Registry.
+
 ```bash
-git clone https://github.com/yourusername/meesman-tracker.git
+# Create a data directory
+mkdir -p meesman-tracker/data
+
+# Download the compose file
+curl -o meesman-tracker/docker-compose.yml \
+  https://raw.githubusercontent.com/TerrorSource/meesman-tracker/main/docker-compose.yml
+
+# Start the container
 cd meesman-tracker
-docker compose up -d --build
+docker compose up -d
 ```
 
 Open `http://localhost:8080/config` to complete setup.
@@ -41,8 +50,7 @@ Open `http://localhost:8080/config` to complete setup.
 ```yaml
 services:
   meesman-tracker:
-    image: meesman-tracker
-    build: .
+    image: ghcr.io/TerrorSource/meesman-tracker:latest
     container_name: meesman-tracker
     ports:
       - "8080:8080"
@@ -51,15 +59,33 @@ services:
       - DB_PATH=/data/app.db
       - CONFIG_PATH=/data/config.yaml
     volumes:
-      - /your/path/to/data:/data
+      - /opt/meesman-tracker/data:/data
     restart: unless-stopped
 ```
 
-> **Note:** Replace `/your/path/to/data` with an absolute path on your host, e.g. `/opt/meesman-tracker/data`. Make sure the directory exists before deploying.
+> **Note:** Replace `/opt/meesman-tracker/data` with an absolute path on your host. Make sure the directory exists before deploying:
+> ```bash
+> mkdir -p /opt/meesman-tracker/data
+> ```
 
 4. Click **Deploy the stack**
 
-Alternatively, if you have the repository on your host, use **Repository** mode and point Portainer to your `docker-compose.yml`.
+### Updating
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+### Building from source
+
+If you want to build the image locally instead of pulling it:
+
+```bash
+git clone https://github.com/TerrorSource/meesman-tracker.git
+cd meesman-tracker
+docker compose -f docker-compose.build.yml up -d --build
+```
 
 ---
 
