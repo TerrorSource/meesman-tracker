@@ -353,6 +353,12 @@ def _fmt_eur(v: float) -> str:
     return f"€ {formatted}"
 
 
+def _fmt_eur_delta(v: float) -> str:
+    """Signed delta with the sign before the symbol: 87.93 → '+€ 87,93', -435.54 → '-€ 435,54'."""
+    sign = "+" if v >= 0 else "-"
+    return f"{sign}{_fmt_eur(abs(v))}"
+
+
 def build_balance_change_message(
     accounts: list,        # list of AccountRow
     prev_values: dict,     # {account_number: float}
@@ -370,6 +376,9 @@ def build_balance_change_message(
     date_str = datetime.now(timezone.utc).strftime("%d-%m-%Y")
 
     for a in sorted(accounts, key=lambda x: x.account_number):
+        # Skip blank/phantom rows (e.g. an empty totals row scraped as "  : € 0,00")
+        if not (a.label or "").strip():
+            continue
         total += a.value_eur
         prev = prev_values.get(a.account_number)
         total_prev += prev if prev is not None else a.value_eur
@@ -388,7 +397,7 @@ def build_balance_change_message(
                 f"{arrow} {a.label} ({a.account_number})\n"
                 f"   Was: {_fmt_eur(prev)}\n"
                 f"   Nu:  {_fmt_eur(a.value_eur)} ({sign}{pct:.2f}%)\n"
-                f"   Δ:   {sign}{_fmt_eur(delta)}"
+                f"   Δ:   {_fmt_eur_delta(delta)}"
             )
             any_change = True
 
@@ -402,7 +411,7 @@ def build_balance_change_message(
     header = f"📊 Meesman saldo update — {date_str}"
     footer = f"\n💰 Totaal: {_fmt_eur(total)}"
     if abs(total_delta) >= 0.01:
-        footer += f" ({sign}{_fmt_eur(total_delta)}, {sign}{total_pct:.2f}%)"
+        footer += f" ({_fmt_eur_delta(total_delta)}, {sign}{total_pct:.2f}%)"
 
     return header + "\n\n" + "\n\n".join(lines) + "\n" + footer
 

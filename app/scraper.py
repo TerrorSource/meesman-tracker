@@ -259,10 +259,18 @@ async def fetch_accounts(
                 if not (num_el and lab_el and val_el):
                     continue
 
+                num = _digits_only(await num_el.inner_text())
+                lab = (await lab_el.inner_text()).strip()
+                val = _parse_eur((await val_el.inner_text()).strip())
+
+                # Skip blank/phantom rows (e.g. an empty totals row with no number/label)
+                if not (num and lab):
+                    continue
+
                 accounts.append(AccountRow(
-                    account_number=_digits_only(await num_el.inner_text()),
-                    label=(await lab_el.inner_text()).strip(),
-                    value_eur=_parse_eur((await val_el.inner_text()).strip()),
+                    account_number=num,
+                    label=lab,
+                    value_eur=val,
                 ))
 
             if accounts:
