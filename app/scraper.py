@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -9,7 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional
 
+import requests
 from playwright.async_api import async_playwright
+
+_HTTP_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -168,35 +173,20 @@ async def fetch_accounts(
         # ------------------------------------------------------------------
         await page.goto(login_url, wait_until="domcontentloaded")
 
-        async def _wait_login():
-            return await page.wait_for_selector(cfg["login_user_selector"], timeout=20_000)
-
-        async def _wait_logged_in():
-            return await page.wait_for_selector(cfg["accounts_row_selector"], timeout=20_000)
-
-        logged_in = False
+        # Wacht op het loginformulier óf een al-ingelogde rekeningtabel
+        # (gecombineerde CSS-selector), en kijk daarna welke van de twee er staat.
         try:
-            done, pending = await asyncio.wait(
-                [asyncio.create_task(_wait_login()), asyncio.create_task(_wait_logged_in())],
-                return_when=asyncio.FIRST_COMPLETED,
-                timeout=22,
+            await page.wait_for_selector(
+                f'{cfg["login_user_selector"]}, {cfg["accounts_row_selector"]}',
+                timeout=22_000,
             )
-            for t in pending:
-                t.cancel()
-            if done:
-                first = next(iter(done))
-                if first.exception() is None and first.get_coro().__name__ == "_wait_logged_in":
-                    logged_in = True
         except Exception:
-            pass
+            await dump(page, "step0_login_timeout")
+            raise
+
+        logged_in = (await page.query_selector(cfg["accounts_row_selector"])) is not None
 
         if not logged_in:
-            try:
-                await page.wait_for_selector(cfg["login_user_selector"], timeout=20_000)
-            except Exception:
-                await dump(page, "step0_login_timeout")
-                raise
-
             await page.fill(cfg["login_user_selector"], cfg["username"])
             await page.fill(cfg["login_pass_selector"], cfg["password"])
             await page.click(cfg["login_submit_selector"])
@@ -374,3 +364,55 @@ async def keepalive_session(
     finally:
         await browser.close()
         await playwright.stop()
+
+
+# ---------------------------------------------------------------------------
+# Lichte HTTP-sessiecheck (geen browser)
+# ---------------------------------------------------------------------------
+def http_session_check(storage_state_path: str) -> Optional[bool]:
+    """
+    Controleer met de opgeslagen cookies of de sessie nog geldig is,
+    zonder een browser te starten (~95% goedkoper dan Chromium).
+
+    Returns:
+      True  — ingelogd (geen redirect naar de loginpagina)
+      False — sessie verlopen (redirect naar login) of geen sessiebestand
+      None  — onduidelijk (netwerkfout e.d.) → caller valt terug op de browser
+    """
+    try:
+        p = Path(storage_state_path)
+        if not p.exists():
+            return False
+
+        state = json.loads(p.read_text(encoding="utf-8"))
+        cookies = state.get("cookies") or []
+        if not cookies:
+            return False
+
+        s = requests.Session()
+        s.headers.update({"User-Agent": _HTTP_UA})
+        now_ts = datetime.now(timezone.utc).timestamp()
+
+        for c in cookies:
+            exp = c.get("expires")
+            if isinstance(exp, (int, float)) and 0 < exp < now_ts:
+                continue  # verlopen cookie overslaan
+            try:
+                s.cookies.set(
+                    c.get("name"), c.get("value"),
+                    domain=c.get("domain"), path=c.get("path") or "/",
+                )
+            except Exception:
+                pass
+
+        r = s.get("https://mijn.meesman.nl/", timeout=30, allow_redirects=True)
+        final_url = (r.url or "").lower()
+
+        if "login" in final_url:
+            return False
+        if r.status_code == 200 and "mijn.meesman.nl" in final_url:
+            return True
+        return None
+
+    except Exception:
+        return None

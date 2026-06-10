@@ -15,6 +15,10 @@
   {% if request.query_params.get('error') == 'no_key' %}
     <p class="err"><strong>Fout:</strong> Genereer eerst een master key.</p>
   {% endif %}
+  {% if request.query_params.get('error') == 'bad_totp' %}
+    <p class="err"><strong>Fout:</strong> Ongeldig TOTP-geheim (geen geldige base32-code).
+      Er is <em>niets</em> opgeslagen — controleer het geheim en probeer opnieuw.</p>
+  {% endif %}
 
   <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
     <span>

@@ -10,13 +10,16 @@ A self-hosted Docker application that automatically logs into [mijn.meesman.nl](
 
 - **Automatic balance scraping** via Playwright (headless Chromium)
 - **TOTP support** — fully unattended, no manual MFA codes needed
-- **Session keepalive** — keeps session alive, auto re-login via TOTP on expiry
-- **Dashboard** with charts, balance history and return per account
-- **Deposit tracking** — distinguish between your own deposits and actual investment returns
+- **Lightweight session keepalive** — HTTP cookie check (full browser only every Nth tick), auto re-login via TOTP on expiry
+- **Catch-up refresh** — refreshes right after a (re)start when the last successful refresh is older than the interval
+- **Dashboard** with charts, balance history, return per account and a configurable growth baseline date; individual data points can be deleted from the changes table
+- **Deposit tracking** — add, edit and delete deposits; distinguish your own deposits from actual investment returns
 - **Home Assistant REST API** — `/api/sensors` and `/deposits.json`
-- **Telegram notifications** on balance change (with % vs previous) and session expiry
+- **CSV export** — `/export.csv` and `/deposits.csv` (Dutch Excel format)
+- **Telegram notifications** on balance change, session expiry, and repeated refresh failures (incl. recovery)
 - **Import** of historical `export.json` and `deposits.json` files
 - **Manual data points** — add historical balances for any date
+- **Health endpoint** (`/health`) with the running app version, also shown in the page footer
 
 ---
 
@@ -50,7 +53,8 @@ Open `http://localhost:8080/config` to complete setup.
 ```yaml
 services:
   meesman-tracker:
-    image: ghcr.io/TerrorSource/meesman-tracker:latest
+    # Registry names must be lowercase
+    image: ghcr.io/terrorsource/meesman-tracker:latest
     container_name: meesman-tracker
     ports:
       - "8080:8080"
@@ -61,6 +65,12 @@ services:
     volumes:
       - /opt/meesman-tracker/data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 ```
 
 > **Note:** Replace `/opt/meesman-tracker/data` with an absolute path on your host. Make sure the directory exists before deploying:
@@ -209,13 +219,18 @@ sensor:
 | `/api/sensors/{account_number}` | GET | Single account balance |
 | `/api/accounts` | GET | Known account numbers and labels |
 | `/export.json` | GET | Full balance history |
+| `/export.csv` | GET | Balance history as CSV (Dutch Excel format) |
 | `/deposits.json` | GET | All deposit records |
+| `/deposits.csv` | GET | Deposits as CSV (Dutch Excel format) |
+| `/health` | GET | Healthcheck with app version |
 | `/refresh-now` | POST | Trigger manual refresh |
+| `/datapoints/delete` | POST | Delete a single balance data point (`account_number` + `ts`) |
 | `/import` | GET/POST | Import `export.json` files |
 | `/import/deposits` | POST | Import `deposits.json` |
 | `/import/manual` | POST | Add a single manual data point |
 | `/deposits` | GET | Deposit management page |
 | `/deposits/add` | POST | Add a deposit |
+| `/deposits/update/{id}` | POST | Edit a deposit |
 | `/deposits/delete/{id}` | POST | Delete a deposit |
 | `/session` | GET | Session and cookie status |
 | `/config` | GET/POST | Configuration page |
@@ -226,13 +241,16 @@ sensor:
 
 | Variable | Default | Description |
 |---|---|---|
-| `TZ` | `UTC` | Timezone (e.g. `Europe/Amsterdam`) |
+| `TZ` | `UTC` | Timezone (e.g. `Europe/Amsterdam`), also used for dates in Telegram messages |
 | `DB_PATH` | `/data/app.db` | SQLite database path |
 | `CONFIG_PATH` | `/data/config.yaml` | Configuration file path |
 | `DATA_DIR` | `/data` | Base data directory |
 | `EXPORT_PATH` | `/data/export.json` | Balance history export |
 | `DEPOSITS_PATH` | `/data/deposits.json` | Deposits export |
+| `SESSION_STATE_PATH` | `/data/session.json` | Playwright session state |
+| `COOKIES_DUMP_PATH` | `/data/cookies.json` | Cookie dump for the session page |
 | `DEBUG_DIR` | `/data/debug` | Screenshots on scrape failure |
+| `APP_VERSION` / `APP_COMMIT` | `dev` / empty | Set by CI as build args; shown in the footer and `/health` |
 
 ---
 
@@ -242,17 +260,18 @@ The app sends a message automatically on:
 
 - **Balance change** — per account with previous/current value, delta and percentage
 - **Session expired** — only when using manual MFA; with TOTP the app re-logins automatically
+- **Repeated refresh failures** — one warning after 3 consecutive failed refreshes, and a recovery message once refreshing works again
 
 Example message:
 ```
-📊 Meesman balance update — 19-03-2026
+📊 Meesman saldo update — 19-03-2026
 
-📈 Investments (12345678)
+📈 Beleggingen (12345678)
    Was: € 20.000,00
-   Now: € 20.500,00 (+2.50%)
+   Nu:  € 20.500,00 (+2,50%)
    Δ:   +€ 500,00
 
-💰 Total: € 45.500,00 (+€ 500,00, +0.26%)
+💰 Totaal: € 45.500,00 (+€ 500,00, +0,26%)
 ```
 
 ---
@@ -270,18 +289,32 @@ Example message:
 ```
 meesman-tracker/
 ├── app/
-│   ├── main.py           # FastAPI routes and business logic
-│   ├── scraper.py        # Playwright scraper with TOTP support
-│   ├── db.py             # SQLite schema
-│   ├── scheduler.py      # APScheduler (refresh + keepalive jobs)
-│   ├── config_store.py   # YAML config management
-│   ├── security.py       # Fernet encryption helpers
+│   ├── main.py              # App bootstrap: lifespan, scheduler jobs, middleware, routers
+│   ├── core.py              # Shared base: paths, engine, templates, formatting/parsing helpers
+│   ├── store.py             # Storage layer: snapshots, deposits, logs, JSON exports
+│   ├── service_refresh.py   # Refresh/keepalive orchestration, failure alerts
+│   ├── telegram.py          # Telegram sending and message building
+│   ├── routes_dashboard.py  # / , /health, /refresh-now, /session
+│   ├── routes_api.py        # /api/*, /export.json|csv, /deposits.json|csv
+│   ├── routes_config.py     # /config*
+│   ├── routes_deposits.py   # /deposits* (add/update/delete)
+│   ├── routes_import.py     # /import*
+│   ├── scraper.py           # Playwright scraper, TOTP, HTTP session check
+│   ├── db.py                # SQLite schema (WAL, unique index)
+│   ├── scheduler.py         # APScheduler instance
+│   ├── config_store.py      # YAML config management
+│   ├── security.py          # Fernet encryption helpers
 │   ├── static/
-│   │   └── app.js        # Dashboard charts (Chart.js)
-│   └── templates/        # Jinja2 HTML templates
-├── data/                 # Mounted volume — never committed to Git
+│   │   ├── app.js           # Dashboard charts (Chart.js) + growth baseline picker
+│   │   └── vendor/          # Locally vendored Chart.js (works offline)
+│   └── templates/           # Jinja2 HTML templates
+├── data/                    # Mounted volume — never committed to Git
+├── .github/
+│   ├── workflows/docker.yml # Multi-arch build (native amd64 + arm64 runners)
+│   └── dependabot.yml       # Weekly dependency update PRs
 ├── Dockerfile
-├── docker-compose.yml
+├── docker-compose.yml       # Prebuilt image from ghcr.io
+├── docker-compose.build.yml # Local development build
 └── requirements.txt
 ```
 

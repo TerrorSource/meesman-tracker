@@ -21,17 +21,23 @@
     <span class="ok">✓ Inleg verwijderd</span>
   </div>
 {% endif %}
+{% if request.query_params.get('updated') == '1' %}
+  <div class="card" style="padding:10px 16px">
+    <span class="ok">✓ Inleg bijgewerkt</span>
+  </div>
+{% endif %}
 {% if error is defined %}
   <div class="card" style="padding:10px 16px">
     <span class="err">✗ {{ error }}</span>
   </div>
 {% endif %}
 
-<!-- ── Invoerformulier ── -->
+<!-- ── Invoerformulier (toevoegen én bewerken) ── -->
 <div class="card">
-  <h3 style="margin:0 0 12px">Inleg toevoegen</h3>
-  <form method="post" action="/deposits/add">
+  <h3 style="margin:0 0 12px" id="form-title">Inleg toevoegen</h3>
+  <form method="post" action="/deposits/add" id="deposit-form">
     <input type="hidden" name="account_number" id="acc-final" value="" />
+    <input type="hidden" name="entry_time" id="entry-time" value="00:00" />
 
     <div class="grid">
       <div>
@@ -53,16 +59,17 @@
       <div>
         <label>Bedrag inleg (€) <small>— gebruik komma: bijv. 4987,50</small></label>
         <input name="amount_eur" type="text" required placeholder="bijv. 4987,50"
-               inputmode="decimal" autocomplete="off" />
+               inputmode="decimal" autocomplete="off" id="amount-inp" />
       </div>
       <div>
         <label>Omschrijving <small>(optioneel)</small></label>
-        <input name="note" type="text" placeholder="bijv. Maandelijkse inleg" autocomplete="off" />
+        <input name="note" type="text" placeholder="bijv. Maandelijkse inleg" autocomplete="off" id="note-inp" />
       </div>
     </div>
 
-    <div style="margin-top:14px">
-      <button type="submit" class="primary">➕ Inleg toevoegen</button>
+    <div style="margin-top:14px; display:flex; gap:8px">
+      <button type="submit" class="primary" id="form-submit">➕ Inleg toevoegen</button>
+      <button type="button" id="form-cancel" style="display:none">✕ Annuleer bewerken</button>
     </div>
   </form>
 </div>
@@ -92,10 +99,19 @@
           € {{ "{:,.2f}".format(d.amount_eur|float).replace(",", "X").replace(".", ",").replace("X", ".") }}
         </td>
         <td style="color:#666">{{ d.note or '' }}</td>
-        <td>
-          <form method="post" action="/deposits/delete/{{ d.id }}"
+        <td style="white-space:nowrap">
+          <button type="button" class="edit-dep" title="Bewerken"
+                  data-id="{{ d.id }}"
+                  data-account="{{ d.account_number }}"
+                  data-date="{{ d.ts[:10] }}"
+                  data-time="{{ d.ts[11:16] or '00:00' }}"
+                  data-amount="{{ '%.2f'|format(d.amount_eur|float) }}"
+                  data-note="{{ d.note or '' }}"
+                  style="background:none; border:none; cursor:pointer;
+                         color:#0066cc; padding:2px 6px; font-size:13px">✎</button>
+          <form method="post" action="/deposits/delete/{{ d.id }}" style="display:inline"
                 onsubmit="return confirm('Inleg verwijderen?')">
-            <button type="submit" style="background:none; border:none; cursor:pointer;
+            <button type="submit" title="Verwijderen" style="background:none; border:none; cursor:pointer;
                     color:#b00020; padding:2px 6px; font-size:13px">✕</button>
           </form>
         </td>
@@ -132,11 +148,18 @@
 {% endif %}
 
 <script>
-const sel      = document.getElementById("acc-select");
-const custom   = document.getElementById("acc-custom");
-const custWrap = document.getElementById("custom-wrap");
-const finalInp = document.getElementById("acc-final");
-const form     = document.querySelector("form");
+const sel       = document.getElementById("acc-select");
+const custom    = document.getElementById("acc-custom");
+const custWrap  = document.getElementById("custom-wrap");
+const finalInp  = document.getElementById("acc-final");
+const form      = document.getElementById("deposit-form");
+const formTitle = document.getElementById("form-title");
+const submitBtn = document.getElementById("form-submit");
+const cancelBtn = document.getElementById("form-cancel");
+const dateInp   = document.getElementById("entry-date");
+const timeInp   = document.getElementById("entry-time");
+const amountInp = document.getElementById("amount-inp");
+const noteInp   = document.getElementById("note-inp");
 
 fetch("/api/accounts")
   .then(r => r.json())
@@ -168,10 +191,52 @@ function syncFinal() {
   finalInp.value = sel.value === "__new__" ? custom.value.trim() : sel.value;
 }
 
-const dateInp = document.getElementById("entry-date");
-const yesterday = new Date();
-yesterday.setDate(yesterday.getDate() - 1);
-dateInp.value = yesterday.toISOString().slice(0, 10);
+function resetForm() {
+  form.action = "/deposits/add";
+  formTitle.textContent = "Inleg toevoegen";
+  submitBtn.textContent = "➕ Inleg toevoegen";
+  cancelBtn.style.display = "none";
+  timeInp.value = "00:00";
+  amountInp.value = "";
+  noteInp.value = "";
+  setDefaultDate();
+}
+
+function setDefaultDate() {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  dateInp.value = yesterday.toISOString().slice(0, 10);
+}
+
+// ── Bewerken: vul het formulier met de bestaande inleg ──
+document.querySelectorAll(".edit-dep").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const d = btn.dataset;
+    form.action = "/deposits/update/" + d.id;
+    formTitle.textContent = "Inleg bewerken";
+    submitBtn.textContent = "💾 Wijzigingen opslaan";
+    cancelBtn.style.display = "";
+
+    const opt = [...sel.options].find(o => o.value === d.account);
+    if (opt) {
+      sel.value = d.account;
+      custWrap.style.display = "none";
+    } else {
+      sel.value = "__new__";
+      custWrap.style.display = "";
+      custom.value = d.account;
+    }
+    dateInp.value   = d.date;
+    timeInp.value   = d.time || "00:00";
+    amountInp.value = d.amount.replace(".", ",");
+    noteInp.value   = d.note || "";
+    syncFinal();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+});
+cancelBtn.addEventListener("click", resetForm);
+
+setDefaultDate();
 </script>
 
 {% endblock %}

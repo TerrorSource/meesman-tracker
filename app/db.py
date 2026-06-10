@@ -1,6 +1,6 @@
 import logging
 import os
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 
 logger = logging.getLogger("meesman")
@@ -9,7 +9,23 @@ logger = logging.getLogger("meesman")
 def get_engine() -> Engine:
     db_path = os.environ.get("DB_PATH", "/data/app.db")
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    return create_engine(f"sqlite:///{db_path}", future=True)
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        future=True,
+        connect_args={"timeout": 30},
+    )
+
+    # WAL: lezen en schrijven blokkeren elkaar niet (webserver + scheduler
+    # schrijven door elkaar); busy_timeout voorkomt 'database is locked'.
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        cur.close()
+
+    return engine
 
 
 def init_db(engine: Engine) -> None:

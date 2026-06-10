@@ -24,12 +24,21 @@
     <strong>HA REST sensor:</strong>
     <a href="/api/sensors"><code>/api/sensors</code></a> &nbsp;|&nbsp;
     <a href="{{ export_path }}"><code>{{ export_path }}</code></a>
+    &nbsp;|&nbsp;
+    <strong>CSV:</strong>
+    <a href="/export.csv"><code>/export.csv</code></a> &nbsp;
+    <a href="/deposits.csv"><code>/deposits.csv</code></a>
     <br><small>Zie <code>/api/sensors/{rekeningnummer}</code> voor een enkel account.</small>
   </p>
 </div>
 
 <div id="totaal-card" class="card" style="display:none">
   <span id="totaal-value"></span>
+  <div style="margin-top:10px; font-size:12px; color:#666; display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+    <span>Groei sinds:</span>
+    <input type="date" id="baseline-date" style="width:auto; padding:4px 8px; font-size:12px" />
+    <button type="button" id="baseline-reset" style="font-size:12px; padding:4px 8px">↺ Eerste meting</button>
+  </div>
 </div>
 
 <div id="charts"></div>
