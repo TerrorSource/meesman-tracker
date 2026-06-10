@@ -80,7 +80,7 @@ class AccountRow:
 # ---------------------------------------------------------------------------
 # Parsers
 # ---------------------------------------------------------------------------
-def _parse_eur(s: str) -> float:
+def parse_eur_text(s: str) -> float:
     """Parse Dutch-formatted currency strings like '€ 29.869,81' → 29869.81"""
     s = s.strip().replace("€", "").replace("\u00a0", " ")
     s = re.sub(r"[^\d,.\-]", "", s)
@@ -88,10 +88,17 @@ def _parse_eur(s: str) -> float:
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
         s = s.replace(",", ".")
+    elif re.fullmatch(r"-?\d{1,3}(\.\d{3})+", s):
+        # Alleen punten, gegroepeerd per drie → duizendtallen ('1.234' → 1234)
+        s = s.replace(".", "")
     try:
         return float(s)
     except ValueError:
         return 0.0
+
+
+# Oude interne naam blijft geldig voor bestaande aanroepen
+_parse_eur = parse_eur_text
 
 
 def _digits_only(s: str) -> str:

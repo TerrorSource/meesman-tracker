@@ -115,11 +115,17 @@ Keep the contents of your `data/` volume — that is all you need:
 | `data/session.json` | Playwright session state (optional, speeds up first login) |
 | `data/cookies.json` | Browser cookies (optional) |
 
-**Steps:**
+**Steps (prebuilt image from ghcr.io — default `docker-compose.yml`):**
 ```bash
-docker compose down
+docker compose pull
+docker compose up -d
+```
+
+**Steps (building from source — `docker-compose.build.yml`):**
+```bash
+docker compose -f docker-compose.build.yml down
 # Replace application files, keeping your data/ directory intact
-docker compose up -d --build
+docker compose -f docker-compose.build.yml up -d --build
 ```
 
 On first startup after an upgrade, the app automatically restores deposits from `deposits.json` if the table is empty. Import `export.json` via `/import` to restore balance history.

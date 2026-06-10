@@ -1,6 +1,9 @@
+import logging
 import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+
+logger = logging.getLogger("meesman")
 
 
 def get_engine() -> Engine:
@@ -25,6 +28,26 @@ def init_db(engine: Engine) -> None:
         CREATE INDEX IF NOT EXISTS idx_accounts_snapshot_acc_ts
         ON accounts_snapshot(account_number, ts);
         """))
+
+    # Dwing uniciteit op (account_number, ts) af; ruim eerst eventuele
+    # bestaande duplicaten op zodat de index aangemaakt kan worden.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                DELETE FROM accounts_snapshot
+                WHERE id NOT IN (
+                    SELECT MAX(id) FROM accounts_snapshot
+                    GROUP BY account_number, ts
+                );
+            """))
+            conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_accounts_snapshot_acc_ts
+                ON accounts_snapshot(account_number, ts);
+            """))
+    except Exception as e:
+        logger.warning("Unieke index op accounts_snapshot kon niet worden aangemaakt: %s", e)
+
+    with engine.begin() as conn:
 
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS refresh_log (

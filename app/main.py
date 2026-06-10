@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import re
 import requests
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, FileResponse
@@ -15,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 
 from .db import get_engine, init_db
-from .scraper import fetch_accounts, keepalive_session
+from .scraper import fetch_accounts, keepalive_session, parse_eur_text
 from .scheduler import scheduler
 from .config_store import load_config, save_config
 from .security import get_or_create_master_key, encrypt_str, decrypt_str
@@ -29,6 +33,12 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger("meesman")
+
+# Lokale tijdzone voor weergave (opslag blijft UTC)
+try:
+    LOCAL_TZ = ZoneInfo(os.environ.get("TZ", "UTC"))
+except Exception:
+    LOCAL_TZ = timezone.utc
 
 
 # ---------------------------------------------------------------------------
@@ -61,16 +71,16 @@ async def lifespan(app: FastAPI):
 
     try:
         write_export_json()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Startup: export.json schrijven mislukt: %s", e)
 
     # Restore deposits from JSON backup if table is empty
     try:
         n = restore_deposits_from_json()
         if n:
             logger.info("Startup: %d inleggen hersteld uit deposits.json", n)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Startup: deposits-restore mislukt: %s", e)
 
     yield
 
@@ -80,6 +90,23 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 templates = Jinja2Templates(directory="app/templates")
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+# Eén scrape tegelijk (refresh, keepalive of handmatige refresh)
+_scrape_lock = asyncio.Lock()
+
+
+@app.middleware("http")
+async def same_origin_post_guard(request: Request, call_next):
+    """Weiger cross-origin browser-POSTs (CSRF). Clients zonder Origin/Referer
+    (curl, Home Assistant) blijven gewoon werken."""
+    if request.method == "POST":
+        source = request.headers.get("origin") or request.headers.get("referer") or ""
+        if source:
+            src_host = urlparse(source).netloc
+            req_host = request.headers.get("host") or ""
+            if src_host and req_host and src_host != req_host:
+                return JSONResponse({"detail": "Cross-origin POST geweigerd"}, status_code=403)
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +137,25 @@ def decrypt_if_present(enc: str | None) -> str:
         return decrypt_str(enc)
     except Exception:
         return ""
+
+
+def to_float(v) -> float:
+    """Normaliseer een DB-waarde (REAL, of legacy tekst in NL-notatie) naar float."""
+    if v is None:
+        return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    return parse_eur_text(str(v))
+
+
+def parse_form_amount(s: str) -> float:
+    """Parse NL-formulierinvoer ('29.869,81' / '4987,50'). Komma is verplicht;
+    raises ValueError bij ongeldige invoer."""
+    v = (s or "").strip().replace("€", "").strip()
+    v = re.sub(r"[^0-9,\-]", "", v)
+    if v.count(",") != 1:
+        raise ValueError("komma als decimaalteken vereist")
+    return float(v.replace(",", "."))
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +243,7 @@ def get_prev_values() -> dict[str, float]:
                 SELECT MAX(id) FROM accounts_snapshot GROUP BY account_number
             )
         """)).mappings().all()
-    return {r["account_number"]: float(str(r["value_eur"]).replace(",", ".")) for r in rows}
+    return {r["account_number"]: to_float(r["value_eur"]) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +264,7 @@ def build_export_payload() -> dict:
     for r in rows:
         acc = r["account_number"]
         labels[acc] = r["label"]
-        pt = {"ts": r["ts"], "value_eur": float(str(r["value_eur"]).replace(",", "."))}
+        pt = {"ts": r["ts"], "value_eur": to_float(r["value_eur"])}
         series.setdefault(acc, []).append(pt)
         latest[acc] = pt
 
@@ -258,7 +304,7 @@ def write_deposits_json() -> None:
             "ts":             r["ts"],
             "account_number": r["account_number"],
             "label":          r["label"],
-            "amount_eur":     float(str(r["amount_eur"]).replace(",", ".")),
+            "amount_eur":     to_float(r["amount_eur"]),
             "note":           r["note"] or "",
         }
         for r in rows
@@ -294,9 +340,10 @@ def restore_deposits_from_json() -> int:
                 ts  = (e.get("ts") or "").strip()
                 acc = (e.get("account_number") or "").strip()
                 lbl = (e.get("label") or acc).strip()
-                amt = float(str(e.get("amount_eur", 0)).replace(",", "."))
+                amt = to_float(e.get("amount_eur", 0))
                 note = (e.get("note") or "").strip() or None
-                if not ts or not acc or amt <= 0:
+                # amt mag negatief zijn (onttrekking), alleen 0 is ongeldig
+                if not ts or not acc or amt == 0:
                     continue
                 conn.execute(text("""
                     INSERT INTO deposits (ts, account_number, label, amount_eur, note)
@@ -359,10 +406,14 @@ def _fmt_eur_delta(v: float) -> str:
     return f"{sign}{_fmt_eur(abs(v))}"
 
 
+def _fmt_pct(v: float) -> str:
+    """Signed Dutch percentage: 0.27 → '+0,27%', -1.3 → '-1,30%'"""
+    return f"{v:+.2f}%".replace(".", ",")
+
+
 def build_balance_change_message(
     accounts: list,        # list of AccountRow
     prev_values: dict,     # {account_number: float}
-    all_prev_values: dict, # {account_number: float} — for total prev calculation
 ) -> str | None:
     """
     Build a Telegram message if any account balance changed.
@@ -373,7 +424,7 @@ def build_balance_change_message(
     total_prev = 0.0
     any_change = False
 
-    date_str = datetime.now(timezone.utc).strftime("%d-%m-%Y")
+    date_str = datetime.now(LOCAL_TZ).strftime("%d-%m-%Y")
 
     for a in sorted(accounts, key=lambda x: x.account_number):
         # Skip blank/phantom rows (e.g. an empty totals row scraped as "  : € 0,00")
@@ -391,12 +442,11 @@ def build_balance_change_message(
         else:
             delta = a.value_eur - prev
             pct   = (delta / prev * 100) if prev else 0.0
-            sign  = "+" if delta >= 0 else ""
             arrow = "📈" if delta >= 0 else "📉"
             lines.append(
                 f"{arrow} {a.label} ({a.account_number})\n"
                 f"   Was: {_fmt_eur(prev)}\n"
-                f"   Nu:  {_fmt_eur(a.value_eur)} ({sign}{pct:.2f}%)\n"
+                f"   Nu:  {_fmt_eur(a.value_eur)} ({_fmt_pct(pct)})\n"
                 f"   Δ:   {_fmt_eur_delta(delta)}"
             )
             any_change = True
@@ -406,12 +456,11 @@ def build_balance_change_message(
 
     total_delta = total - total_prev
     total_pct   = (total_delta / total_prev * 100) if total_prev else 0.0
-    sign        = "+" if total_delta >= 0 else ""
 
     header = f"📊 Meesman saldo update — {date_str}"
     footer = f"\n💰 Totaal: {_fmt_eur(total)}"
     if abs(total_delta) >= 0.01:
-        footer += f" ({_fmt_eur_delta(total_delta)}, {sign}{total_pct:.2f}%)"
+        footer += f" ({_fmt_eur_delta(total_delta)}, {_fmt_pct(total_pct)})"
 
     return header + "\n\n" + "\n\n".join(lines) + "\n" + footer
 
@@ -419,13 +468,19 @@ def build_balance_change_message(
 # ---------------------------------------------------------------------------
 # Core refresh logic
 # ---------------------------------------------------------------------------
-async def refresh_once() -> None:
+async def refresh_once() -> bool:
+    """Geserialiseerde refresh: hooguit één scrape tegelijk. Returnt True bij succes."""
+    async with _scrape_lock:
+        return await _do_refresh()
+
+
+async def _do_refresh() -> bool:
     cfg = load_config()
 
     if not cfg_has_key(cfg):
         logger.info("Refresh: no master key, skipping.")
         write_refresh_log("skipped", 0, "No master key configured yet")
-        return
+        return False
 
     username = (cfg.get("username") or "").strip()
     password = decrypt_if_present(cfg.get("password_enc"))
@@ -433,7 +488,7 @@ async def refresh_once() -> None:
     if not username or not password:
         logger.info("Refresh: username/password missing, skipping.")
         write_refresh_log("skipped", 0, "Missing username/password")
-        return
+        return False
 
     mfa_mode = cfg.get("mfa_mode", "manual")
 
@@ -444,7 +499,7 @@ async def refresh_once() -> None:
             msg = "Handmatige MFA-code vereist. Voer een nieuwe in via /config."
             logger.warning("Refresh: %s", msg)
             write_refresh_log("failed", 0, msg)
-            return
+            return False
         totp_secret = ""
     elif mfa_mode == "totp":
         totp_secret = decrypt_if_present(cfg.get("totp_secret_enc")).strip()
@@ -453,7 +508,7 @@ async def refresh_once() -> None:
             msg = "TOTP-geheim niet ingesteld. Stel het in via /config."
             logger.warning("Refresh: %s", msg)
             write_refresh_log("failed", 0, msg)
-            return
+            return False
     else:
         mfa_code = totp_secret = ""
 
@@ -480,7 +535,7 @@ async def refresh_once() -> None:
             msg = "Scrape leverde 0 rekeningen op (login/MFA/selectors mislukt)"
             logger.warning("Refresh: %s", msg)
             write_refresh_log("failed", 0, msg)
-            return
+            return False
 
         # ------------------------------------------------------------------
         # Compare with previous values (only store when changed)
@@ -508,15 +563,18 @@ async def refresh_once() -> None:
         # Telegram notification on balance change
         # ------------------------------------------------------------------
         if telegram_enabled(cfg):
-            msg = build_balance_change_message(accounts, prev_values, prev_values)
+            msg = build_balance_change_message(accounts, prev_values)
             if msg:
-                ok, info = send_telegram(cfg, msg)
+                ok, info = await asyncio.to_thread(send_telegram, cfg, msg)
                 logger.info("Telegram balance update: ok=%s info=%s", ok, info)
+
+        return True
 
     except Exception as e:
         msg = f"Onverwachte fout: {type(e).__name__}: {e}"
         logger.exception("Refresh: %s", msg)
         write_refresh_log("failed", 0, msg)
+        return False
 
 
 async def keepalive_tick() -> None:
@@ -530,12 +588,14 @@ async def keepalive_tick() -> None:
 
     sels = cfg.get("selectors") or {}
     try:
-        ok = await keepalive_session(
-            {"accounts_row_selector": sels.get("accounts_row_selector", "")},
-            storage_state_path=str(SESSION_STATE_PATH),
-            dump_cookies_path=str(COOKIES_DUMP_PATH),
-        )
-    except Exception:
+        async with _scrape_lock:
+            ok = await keepalive_session(
+                {"accounts_row_selector": sels.get("accounts_row_selector", "")},
+                storage_state_path=str(SESSION_STATE_PATH),
+                dump_cookies_path=str(COOKIES_DUMP_PATH),
+            )
+    except Exception as e:
+        logger.warning("Keepalive: onverwachte fout: %s", e)
         ok = False
 
     if ok:
@@ -553,12 +613,16 @@ async def keepalive_tick() -> None:
     if mfa_mode == "totp" and totp_secret:
         logger.info("Keepalive: TOTP beschikbaar — automatisch opnieuw inloggen.")
         write_refresh_log("session_expired", 0, "Sessie verlopen — automatisch herstel gestart (TOTP)")
-        await refresh_once()
-        write_keepalive_log("recovered", "Sessie automatisch hersteld via TOTP")
+        recovered = await refresh_once()
+        if recovered:
+            write_keepalive_log("recovered", "Sessie automatisch hersteld via TOTP")
+        else:
+            write_keepalive_log("failed", "Automatisch herstel mislukt — zie refresh-log")
     else:
         # Manual MFA: we can't re-login automatically, notify the user
         write_refresh_log("session_expired", 0, "Sessie verlopen (keepalive) — handmatige actie vereist")
-        send_telegram(
+        await asyncio.to_thread(
+            send_telegram,
             cfg,
             "⚠️ Meesman-tracker: sessie verlopen.\n\n"
             "Open /config, voer een nieuwe MFA-code in, sla op en klik op 'Refresh now'.",
@@ -574,7 +638,7 @@ def get_deposits() -> dict[str, float]:
             SELECT account_number, SUM(amount_eur) as total
             FROM deposits GROUP BY account_number
         """)).mappings().all()
-    return {r["account_number"]: float(r["total"]) for r in rows}
+    return {r["account_number"]: to_float(r["total"]) for r in rows}
 
 # ---------------------------------------------------------------------------
 # Routes — dashboard
@@ -601,7 +665,7 @@ def dashboard(request: Request):
     for r in rows:
         acc = r["account_number"]
         labels[acc] = r["label"]
-        val = float(str(r["value_eur"]).replace(",", "."))  # SQLite kan tekst of komma-notatie teruggeven
+        val = to_float(r["value_eur"])  # SQLite kan tekst of komma-notatie teruggeven (legacy rijen)
 
         if acc not in first_val:
             first_val[acc] = {"ts": r["ts"], "value": val}
@@ -652,10 +716,17 @@ def dashboard(request: Request):
 
     return templates.TemplateResponse("dashboard.html", {
         "request":      request,
-        "payload_json": json.dumps(payload),
+        # '</' escapen zodat een label nooit uit het <script>-blok kan breken
+        "payload_json": json.dumps(payload).replace("</", "<\\/"),
         "last_refresh": dict(last) if last else None,
         "export_path":  "/export.json",
     })
+
+
+@app.get("/health")
+def health():
+    """Healthcheck voor Docker/NAS."""
+    return JSONResponse({"status": "ok", "time": now_iso()})
 
 
 @app.post("/refresh-now")
@@ -720,7 +791,7 @@ def api_sensors():
         {
             "account_number": r["account_number"],
             "label":          r["label"],
-            "value_eur":      float(str(r["value_eur"]).replace(",", ".")),
+            "value_eur":      to_float(r["value_eur"]),
             "last_updated":   r["ts"],
         }
         for r in rows
@@ -759,7 +830,7 @@ def api_sensor_account(account_number: str):
     return JSONResponse({
         "account_number": row["account_number"],
         "label":          row["label"],
-        "value_eur":      row["value_eur"],
+        "value_eur":      to_float(row["value_eur"]),
         "last_updated":   row["ts"],
     })
 
@@ -873,16 +944,12 @@ def config_save(
     if pw and pw != "********":
         cfg["password_enc"] = encrypt_str(pw)
 
-    if totp_secret.strip():
-        cfg["totp_secret_enc"] = encrypt_str(totp_secret.strip())
-
-    if manual_mfa_code.strip():
-        cfg["manual_mfa_code_enc"] = encrypt_str(manual_mfa_code.strip())
-
-    if telegram_bot_token.strip():
-        cfg["telegram_bot_token_enc"] = encrypt_str(telegram_bot_token.strip())
-    if telegram_chat_id.strip():
-        cfg["telegram_chat_id_enc"] = encrypt_str(telegram_chat_id.strip())
+    # Velden staan vooringevuld met de huidige waarde in de UI;
+    # leeg insturen betekent dus bewust wissen.
+    cfg["totp_secret_enc"]        = encrypt_str(totp_secret.strip())        if totp_secret.strip()        else ""
+    cfg["manual_mfa_code_enc"]    = encrypt_str(manual_mfa_code.strip())    if manual_mfa_code.strip()    else ""
+    cfg["telegram_bot_token_enc"] = encrypt_str(telegram_bot_token.strip()) if telegram_bot_token.strip() else ""
+    cfg["telegram_chat_id_enc"]   = encrypt_str(telegram_chat_id.strip())   if telegram_chat_id.strip()   else ""
 
     save_config(cfg)
 
@@ -890,8 +957,8 @@ def config_save(
     try:
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM keepalive_log"))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Keepalive-log leegmaken mislukt: %s", e)
 
     scheduler.reschedule_job("refresh_job",   trigger="interval", hours=int(refresh_hours))
     scheduler.reschedule_job("keepalive_job", trigger="interval", minutes=max(5, int(keepalive_minutes)))
@@ -903,7 +970,7 @@ def config_save(
 @app.post("/config/test-telegram")
 async def config_test_telegram():
     cfg = load_config()
-    ok, _ = send_telegram(cfg, "✅ meesman-tracker Telegram test")
+    ok, _ = await asyncio.to_thread(send_telegram, cfg, "✅ meesman-tracker Telegram test")
     return RedirectResponse(url=f"/config?tg_test={'1' if ok else '0'}&tg_err={'0' if ok else '1'}", status_code=303)
 
 # ---------------------------------------------------------------------------
@@ -974,7 +1041,7 @@ async def import_post(request: Request, files: list[UploadFile] = File(...)):
                     conn.execute(text("""
                         INSERT INTO accounts_snapshot (ts, account_number, label, value_eur)
                         VALUES (:ts, :n, :l, :v)
-                    """), {"ts": ts, "n": acc_number, "l": label, "v": float(str(value_eur).replace(",", "."))})
+                    """), {"ts": ts, "n": acc_number, "l": label, "v": to_float(value_eur)})
                     inserted += 1
 
         results.append({"file": fname, "error": None, "inserted": inserted, "skipped": skipped})
@@ -984,8 +1051,8 @@ async def import_post(request: Request, files: list[UploadFile] = File(...)):
     if any(r["inserted"] > 0 for r in results):
         try:
             write_export_json()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("export.json herbouwen na import mislukt: %s", e)
 
     total_inserted = sum(r["inserted"] for r in results)
     total_skipped  = sum(r["skipped"]  for r in results)
@@ -1040,14 +1107,8 @@ async def import_manual(
 
     # Parse Dutch number format only: "29.869,81" or "29869,81"
     try:
-        import re as _re
-        v = value_eur.strip().replace("€", "").replace("\u00a0", " ").strip()
-        v = _re.sub(r"[^\d,\-]", "", v)   # strip everything except digits, comma, minus
-        if v.count(",") > 1 or "," not in v:
-            raise ValueError("Gebruik komma als decimaalteken, bijv. 4987,50")
-        v = v.replace(",", ".")
-        value_eur_float = float(v)
-    except (ValueError, AttributeError) as _e:
+        value_eur_float = parse_form_amount(value_eur)
+    except (ValueError, AttributeError):
         return templates.TemplateResponse("import.html", {
             "request": request,
             "manual_error": f"Ongeldig bedrag: '{value_eur}'. Gebruik komma als decimaalteken, bijv. 4987,50 of 29869,81",
@@ -1079,12 +1140,12 @@ async def import_manual(
         conn.execute(text("""
             INSERT INTO accounts_snapshot (ts, account_number, label, value_eur)
             VALUES (:ts, :n, :l, :v)
-        """), {"ts": ts, "n": acc_number, "l": label.strip() or acc_number, "v": value_eur})
+        """), {"ts": ts, "n": acc_number, "l": label.strip() or acc_number, "v": value_eur_float})
 
     try:
         write_export_json()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("export.json herbouwen na handmatig datapunt mislukt: %s", e)
 
     logger.info("Handmatig datapunt toegevoegd: %s %s € %.2f", acc_number, ts, value_eur_float)
 
@@ -1099,16 +1160,20 @@ async def import_manual(
 # ---------------------------------------------------------------------------
 # Routes — deposits (inleg)
 # ---------------------------------------------------------------------------
-@app.get("/deposits", response_class=HTMLResponse)
-def deposits_page(request: Request):
+def _load_deposits() -> list[dict]:
     with engine.begin() as conn:
         rows = conn.execute(text("""
             SELECT id, ts, account_number, label, amount_eur, note
             FROM deposits ORDER BY ts DESC
         """)).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@app.get("/deposits", response_class=HTMLResponse)
+def deposits_page(request: Request):
     return templates.TemplateResponse("deposits.html", {
         "request": request,
-        "deposits": [dict(r) for r in rows],
+        "deposits": _load_deposits(),
     })
 
 
@@ -1124,7 +1189,7 @@ async def deposits_add(
     acc_number = account_number.strip()
     if not acc_number:
         return templates.TemplateResponse("deposits.html", {
-            "request": request, "error": "Rekeningnummer is verplicht.", "deposits": [],
+            "request": request, "error": "Rekeningnummer is verplicht.", "deposits": _load_deposits(),
         })
 
     try:
@@ -1132,19 +1197,14 @@ async def deposits_add(
         ts = dt.isoformat()
     except ValueError:
         return templates.TemplateResponse("deposits.html", {
-            "request": request, "error": "Ongeldige datum of tijd.", "deposits": [],
+            "request": request, "error": "Ongeldige datum of tijd.", "deposits": _load_deposits(),
         })
 
     try:
-        import re as _re
-        v = amount_eur.strip().replace("€", "").replace("\u00a0", " ").strip()
-        v = _re.sub(r"[^\d,\-]", "", v)
-        if "," not in v:
-            raise ValueError
-        amount_float = float(v.replace(",", "."))
+        amount_float = parse_form_amount(amount_eur)
     except (ValueError, AttributeError):
         return templates.TemplateResponse("deposits.html", {
-            "request": request, "error": f"Ongeldig bedrag '{amount_eur}'. Gebruik komma: bijv. 4987,50", "deposits": [],
+            "request": request, "error": f"Ongeldig bedrag '{amount_eur}'. Gebruik komma: bijv. 4987,50", "deposits": _load_deposits(),
         })
 
     with engine.begin() as conn:
@@ -1162,8 +1222,8 @@ async def deposits_add(
     logger.info("Inleg toegevoegd: %s %s € %.2f", acc_number, ts, amount_float)
     try:
         write_deposits_json()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("deposits.json bijwerken mislukt: %s", e)
     return RedirectResponse(url="/deposits?saved=1", status_code=303)
 
 
@@ -1174,8 +1234,8 @@ async def deposits_delete(deposit_id: int):
     logger.info("Inleg verwijderd: id=%d", deposit_id)
     try:
         write_deposits_json()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("deposits.json bijwerken mislukt: %s", e)
     return RedirectResponse(url="/deposits?deleted=1", status_code=303)
 
 @app.get("/deposits.json")
@@ -1229,10 +1289,11 @@ async def import_deposits(request: Request, files: list[UploadFile] = File(...))
                 ts  = (e.get("ts") or "").strip()
                 acc = (e.get("account_number") or "").strip()
                 lbl = (e.get("label") or acc).strip()
-                amt = float(str(e.get("amount_eur", 0)).replace(",", "."))
+                amt = to_float(e.get("amount_eur", 0))
                 note = (e.get("note") or "").strip() or None
 
-                if not ts or not acc or amt <= 0:
+                # amt mag negatief zijn (onttrekking), alleen 0 is ongeldig
+                if not ts or not acc or amt == 0:
                     skipped += 1
                     continue
 
@@ -1258,8 +1319,8 @@ async def import_deposits(request: Request, files: list[UploadFile] = File(...))
     if any(r["inserted"] > 0 for r in results):
         try:
             write_deposits_json()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("deposits.json herbouwen na import mislukt: %s", e)
 
     total_inserted = sum(r["inserted"] for r in results)
     total_skipped  = sum(r["skipped"]  for r in results)

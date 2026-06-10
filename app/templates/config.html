@@ -78,7 +78,7 @@
     </div>
 
     <div id="section_totp" style="display:none">
-      <label>TOTP-geheim (base32, bijv. uit je authenticator-app)</label>
+      <label>TOTP-geheim (base32, bijv. uit je authenticator-app) <small>(leegmaken = wissen)</small></label>
       <input name="totp_secret" value="{{ cfg.totp_secret or '' }}" autocomplete="off"
              placeholder="JBSWY3DPEHPK3PXP" />
       <small>
@@ -88,7 +88,7 @@
     </div>
 
     <div id="section_manual" style="display:none">
-      <label>Handmatige MFA-code</label>
+      <label>Handmatige MFA-code <small>(leegmaken = wissen)</small></label>
       <input name="manual_mfa_code" value="{{ cfg.manual_mfa_code or '' }}" autocomplete="off" />
       <small>
         ⚠️ Codes verlopen snel (~30 sec). Voer een <em>verse</em> code in vlak voordat je
@@ -122,12 +122,12 @@
     </small>
     <div class="grid">
       <div>
-        <label>Bot-token</label>
+        <label>Bot-token <small>(leegmaken = wissen)</small></label>
         <input name="telegram_bot_token" value="{{ cfg.telegram_bot_token or '' }}"
                placeholder="123456:ABC-..." autocomplete="off" />
       </div>
       <div>
-        <label>Chat-ID</label>
+        <label>Chat-ID <small>(leegmaken = wissen)</small></label>
         <input name="telegram_chat_id" value="{{ cfg.telegram_chat_id or '' }}"
                placeholder="-100123456789" autocomplete="off" />
         <small>Gebruik een positief getal voor persoonlijk chat, negatief voor groep/kanaal.</small>

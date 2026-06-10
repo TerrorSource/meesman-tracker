@@ -1,6 +1,7 @@
 services:
   meesman-tracker:
-    image: ghcr.io/TerrorSource/meesman-tracker:latest
+    # Let op: registry-namen moeten lowercase zijn
+    image: ghcr.io/terrorsource/meesman-tracker:latest
     container_name: meesman-tracker
     ports:
       - "8080:8080"
@@ -11,3 +12,9 @@ services:
     volumes:
       - ./data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
