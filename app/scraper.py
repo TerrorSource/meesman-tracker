@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ _HTTP_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
+
+logger = logging.getLogger("meesman")
 
 
 # ---------------------------------------------------------------------------
@@ -171,18 +174,41 @@ async def fetch_accounts(
         # ------------------------------------------------------------------
         # 1) Navigate to login – reuse session if possible
         # ------------------------------------------------------------------
-        await page.goto(login_url, wait_until="domcontentloaded")
-
         # Wacht op het loginformulier óf een al-ingelogde rekeningtabel
-        # (gecombineerde CSS-selector), en kijk daarna welke van de twee er staat.
+        # (gecombineerde CSS-selector). Ruime timeout: de loginflow loopt via
+        # een externe identity-provider en kan op NAS-hardware traag zijn.
+        combined_selector = f'{cfg["login_user_selector"]}, {cfg["accounts_row_selector"]}'
+
+        await page.goto(login_url, wait_until="domcontentloaded")
         try:
-            await page.wait_for_selector(
-                f'{cfg["login_user_selector"]}, {cfg["accounts_row_selector"]}',
-                timeout=22_000,
-            )
+            await page.wait_for_selector(combined_selector, timeout=45_000)
         except Exception:
             await dump(page, "step0_login_timeout")
-            raise
+            if not ctx_kwargs:
+                # Er was al geen opgeslagen sessie — niets om weg te gooien
+                raise
+
+            # Zelfherstel: een verouderde opgeslagen sessie kan de (gewijzigde)
+            # loginflow blokkeren. Gooi de sessie weg en probeer één keer
+            # opnieuw met een schone browsercontext.
+            logger.warning(
+                "Login-wachtstap faalde met opgeslagen sessie — "
+                "sessie wordt gewist, retry met schone context."
+            )
+            await ctx.close()
+            try:
+                Path(storage_state_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            ctx  = await browser.new_context()
+            page = await ctx.new_page()
+            await page.goto(login_url, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_selector(combined_selector, timeout=45_000)
+            except Exception:
+                await dump(page, "step0_login_timeout_retry")
+                raise
 
         logged_in = (await page.query_selector(cfg["accounts_row_selector"])) is not None
 
