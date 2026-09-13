@@ -19,6 +19,11 @@ os.environ.update({
     "TZ":                 "Europe/Amsterdam",
     "APP_VERSION":        "vtest",
     "SELF_RESTART":       "0",
+    # v10: auth-variabelen expliciet leeg (tests zetten ze zelf via monkeypatch)
+    "APP_USER":           "",
+    "APP_PASSWORD":       "",
+    "API_TOKEN":          "",
+    "MASTER_KEY":         "",
 })
 
 import pytest  # noqa: E402

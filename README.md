@@ -21,6 +21,7 @@ A self-hosted Docker application that automatically logs into [mijn.meesman.nl](
 - **Telegram notifications** on balance change (with optional € / % thresholds), session expiry, repeated refresh failures (with the debug screenshot attached, incl. recovery), browser failures, missing accounts, new messages in your Meesman inbox, and monthly/weekly summaries
 - **Import** of historical `export.json` and `deposits.json` files
 - **Manual data points** — add historical balances for any date
+- **Access control** — Basic Auth for the UI and a bearer token for the Home Assistant endpoints, both via environment variables; runs as a non-root user; master key can live in an environment variable instead of `config.yaml`
 - **Status page** with the last 30 refreshes (time, status, duration, message) and a **health endpoint** (`/health`) with `ok`/`degraded` status; `/api/sensors` carries the same freshness fields for Home Assistant
 - **Daily database backups** (`data/backups/`, consistent copies via `VACUUM INTO`, configurable retention)
 - **Scraper selectors editable in the UI** — fix a Meesman DOM change without waiting for a new release
@@ -279,6 +280,10 @@ template:
 | `BACKUP_DIR` | `/data/backups` | Daily database copies |
 | `APP_VERSION` / `APP_COMMIT` | `dev` / empty | Set by CI as build args; shown in the footer and `/health` |
 | `SELF_RESTART` | `1` | When Chromium cannot start (host problem), exit the process so Docker restarts the container cleanly. Set to `0` to disable |
+| `APP_USER` / `APP_PASSWORD` | unset | Basic Auth for the UI (see *Security*) |
+| `API_TOKEN` | unset | Bearer token for `/api/*`, `/export.json`, `/deposits.json` |
+| `MASTER_KEY` | unset | Fernet master key; overrides the one in `config.yaml` |
+| `PUID` / `PGID` | `1000` | uid/gid the app runs as; `/data` is chowned to it at start |
 | `API_CAPTURE` | `0` | Set to `1` to write every JSON response from `*.meesman.nl` during a refresh to `data/debug/api_capture.json` (debugging only) |
 
 ---
@@ -323,9 +328,37 @@ Example message:
 
 ## Security
 
+Since v10 the app can be locked down with environment variables — **without them it behaves exactly as before** (open on your LAN), so an update never locks you out. Set them in `docker-compose.yml` (or the Portainer stack) and recreate the container:
+
+| Variable | Purpose |
+|---|---|
+| `APP_USER` / `APP_PASSWORD` | HTTP Basic Auth for every page and form. Your browser asks once and remembers it. |
+| `API_TOKEN` | Token for the machine endpoints (`/api/*`, `/export.json`, `/deposits.json`), sent as `Authorization: Bearer <token>` or `X-API-Token: <token>`. Basic Auth is accepted there too, so Home Assistant can use either. |
+| `MASTER_KEY` | The Fernet key used to encrypt your Meesman password, TOTP secret and Telegram token. Copy the `master_key` value from `data/config.yaml` here; the key then no longer has to live next to the ciphertexts. |
+| `PUID` / `PGID` | The container runs as a non-root user (default uid/gid 1000). At start-up it takes ownership of `/data`, so a data directory created by an older (root) version keeps working. Use the uid/gid of your NAS user (`id` on the NAS) if you want the files to stay accessible from the host. |
+
+`/health` and `/static/` stay open (Docker healthcheck, CSS/JS). A wrong password is delayed by one second to slow down brute-force attempts. Every response carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`.
+
+**Home Assistant with a token:**
+
+```yaml
+sensor:
+  - platform: rest
+    resource: http://192.168.1.x:8080/api/sensors
+    headers:
+      Authorization: "Bearer YOUR_API_TOKEN"
+    name: Meesman Total
+    value_template: "{{ value_json.total }}"
+    unit_of_measurement: EUR
+```
+
+**Behind a reverse proxy or Cloudflare Tunnel:** the CSRF guard compares the browser's `Origin` with `X-Forwarded-Host` (falling back to `Host`), so a proxy that sets that header works out of the box. Cloudflare Access can be layered on top for a second login step.
+
+**Manual MFA mode:** the one-time code is wiped from the configuration right after the refresh that used it (codes are only valid for ~30 seconds anyway).
+
 - Password, TOTP secret and Telegram token are stored **Fernet-encrypted** in `config.yaml`
-- The master key is also stored in `config.yaml` — the entire `data/` directory is excluded from Git via `.gitignore`
-- Do not expose the container publicly without additional authentication (e.g. a reverse proxy with basic auth or Authelia)
+- Without `MASTER_KEY` the key is stored in `config.yaml` next to the ciphertexts — the entire `data/` directory is excluded from Git via `.gitignore`
+- Do not expose the container to the internet without `APP_USER`/`APP_PASSWORD` (or Cloudflare Access / a reverse proxy with authentication in front of it)
 
 ---
 
@@ -335,6 +368,7 @@ Example message:
 meesman-tracker/
 ├── app/
 │   ├── main.py              # App bootstrap: lifespan, scheduler jobs, middleware, routers
+│   ├── auth.py              # Basic Auth (UI) + API token (machine endpoints)
 │   ├── core.py              # Shared base: paths, engine, templates, formatting/parsing helpers
 │   ├── store.py             # Storage layer: snapshots, deposits, logs, JSON exports
 │   ├── service_refresh.py   # Refresh/keepalive orchestration, failure alerts
@@ -362,7 +396,8 @@ meesman-tracker/
 │   ├── workflows/docker.yml           # Tests → multi-arch build (native amd64 + arm64)
 │   ├── workflows/selector-canary.yml  # Daily Meesman selector check
 │   └── dependabot.yml                 # Weekly dependency update PRs
-├── Dockerfile               # tini as PID 1, chromium-headless-shell
+├── Dockerfile               # tini as PID 1, non-root user, chromium-headless-shell
+├── docker-entrypoint.sh     # PUID/PGID mapping + chown /data, then drop privileges
 ├── docker-compose.yml       # Prebuilt image from ghcr.io
 ├── docker-compose.build.yml # Local development build
 ├── requirements.txt

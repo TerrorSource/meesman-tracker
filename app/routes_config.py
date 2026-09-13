@@ -8,10 +8,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import text
 
+from .auth import auth
 from .config_store import DEFAULT_SELECTORS, load_config, save_config
 from .core import cfg_has_key, decrypt_if_present, engine, logger, templates
 from .scheduler import scheduler
-from .security import encrypt_str, get_or_create_master_key
+from .security import encrypt_str, get_or_create_master_key, master_key_source
 from .service_refresh import build_refresh_trigger
 from .telegram import send_telegram
 
@@ -35,6 +36,8 @@ def config_page(request: Request):
 
     view = {
         "has_key":          cfg_has_key(cfg),
+        "key_source":       master_key_source(),
+        "auth":             auth.summary(),
         "username":         cfg.get("username") or "",
         "refresh_time":     cfg.get("refresh_time") or "",
         "refresh_days":     cfg.get("refresh_days") or "daily",

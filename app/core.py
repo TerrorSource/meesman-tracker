@@ -98,7 +98,8 @@ def fmt_timedelta(seconds: float) -> str:
 
 
 def cfg_has_key(cfg: dict) -> bool:
-    return bool((cfg.get("master_key") or "").strip())
+    """Is er een master key (env MASTER_KEY of config.yaml)?"""
+    return bool((os.environ.get("MASTER_KEY") or "").strip() or (cfg.get("master_key") or "").strip())
 
 
 def decrypt_if_present(enc: str | None) -> str:

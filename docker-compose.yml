@@ -9,6 +9,14 @@ services:
       - TZ=Europe/Amsterdam
       - DB_PATH=/data/app.db
       - CONFIG_PATH=/data/config.yaml
+      # ── Beveiliging (v10, aanbevolen — zie README) ──
+      # - APP_USER=marc                      # Basic Auth voor alle pagina's
+      # - APP_PASSWORD=kies-een-sterk-wachtwoord
+      # - API_TOKEN=lange-willekeurige-string # voor Home Assistant (/api/*, exports)
+      # - MASTER_KEY=...                     # waarde uit data/config.yaml (optioneel)
+      # ── Non-root: uid/gid van de eigenaar van de data-map (zie `id`) ──
+      # - PUID=1000
+      # - PGID=1000
     volumes:
       - ./data:/data
     restart: unless-stopped

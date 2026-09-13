@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .auth import auth, check_request
 from .config_store import load_config
 from .core import APP_VERSION_FULL, LOCAL_TZ, cfg_has_key, logger
 from .scheduler import scheduler
@@ -64,6 +65,11 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("Scheduler started (refresh %s, keepalive=%dmin, versie=%s)",
                 refresh_desc, keepalive_minutes, APP_VERSION_FULL)
+    if auth.ui_enabled:
+        logger.info("Authenticatie actief (Basic Auth, gebruiker %s; API-token %s)",
+                    auth.user, "actief" if auth.token_enabled else "niet ingesteld")
+    else:
+        logger.warning("GEEN authenticatie ingesteld — zet APP_USER en APP_PASSWORD (zie README).")
     if cfg.get("mfa_mode") == "totp":
         logger.info("Keepalive is uitgeschakeld in TOTP-modus (de refresh logt zelf opnieuw in).")
 
@@ -119,18 +125,37 @@ app = FastAPI(lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
+def _request_host(request: Request) -> str:
+    """Host zoals de browser hem ziet — achter een reverse proxy of Cloudflare-tunnel
+    staat die in X-Forwarded-Host (eerste waarde), anders in Host."""
+    fwd = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    return fwd or (request.headers.get("host") or "")
+
+
 @app.middleware("http")
-async def same_origin_post_guard(request: Request, call_next):
-    """Weiger cross-origin browser-POSTs (CSRF). Clients zonder Origin/Referer
-    (curl, Home Assistant) blijven gewoon werken."""
+async def security_middleware(request: Request, call_next):
+    """1) Authenticatie (Basic Auth / API-token), 2) CSRF-guard voor POSTs,
+    3) beveiligingsheaders op elk antwoord."""
+    denied = await check_request(request)
+    if denied is not None:
+        return denied
+
+    # Weiger cross-origin browser-POSTs (CSRF). Clients zonder Origin/Referer
+    # (curl, Home Assistant) blijven gewoon werken.
     if request.method == "POST":
         source = request.headers.get("origin") or request.headers.get("referer") or ""
         if source:
             src_host = urlparse(source).netloc
-            req_host = request.headers.get("host") or ""
+            req_host = _request_host(request)
             if src_host and req_host and src_host != req_host:
                 return JSONResponse({"detail": "Cross-origin POST geweigerd"}, status_code=403)
-    return await call_next(request)
+
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 
 app.include_router(routes_dashboard.router)

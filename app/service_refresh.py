@@ -11,7 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import text
 
-from .config_store import load_config
+from .config_store import load_config, save_config
 from .core import (
     COOKIES_DUMP_PATH,
     LOCAL_TZ,
@@ -173,6 +173,18 @@ async def _handle_launch_failure(cfg: dict, context: str) -> None:
         asyncio.get_running_loop().call_later(5, os._exit, 3)
 
 
+def clear_manual_mfa_code() -> bool:
+    """Wis de handmatige MFA-code na gebruik: zo'n code is eenmalig en ~30 s
+    geldig, dus bewaren heeft geen zin en levert alleen zinloze herpogingen op."""
+    cfg = load_config()
+    if not (cfg.get("manual_mfa_code_enc") or "").strip():
+        return False
+    cfg["manual_mfa_code_enc"] = ""
+    save_config(cfg)
+    logger.info("Handmatige MFA-code gewist (eenmalig gebruikt).")
+    return True
+
+
 async def _do_refresh() -> tuple[bool, str]:
     """Returnt (ok, soort): soort is 'ok', 'config' (instellingen ontbreken),
     'scrape' (login/site/netwerk) of 'launch' (Chromium start niet)."""
@@ -237,6 +249,10 @@ async def _do_refresh() -> tuple[bool, str]:
             collect_messages=inbox,
         )
         duration = round(time.monotonic() - t0, 1)
+
+        # De handmatige code is nu verbruikt (of verlopen) — altijd wissen
+        if mfa_mode == "manual":
+            clear_manual_mfa_code()
 
         if not accounts:
             msg = "Scrape leverde 0 rekeningen op (login/MFA/selectors mislukt)"

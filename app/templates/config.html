@@ -23,6 +23,39 @@
       Er is <em>niets</em> opgeslagen — controleer het geheim en probeer opnieuw.</p>
   {% endif %}
 
+  <!-- ── Beveiligingsstatus ── -->
+  <div style="margin-bottom:12px; padding:10px 12px; border-radius:8px; border:1px solid var(--border); background:var(--th)">
+    <strong>Beveiliging</strong>
+    <div style="margin-top:6px; font-size:13px; display:grid; gap:4px">
+      <span>Toegang tot de app:
+        {% if cfg.auth.ui_enabled %}
+          <span class="ok">✓ Basic Auth actief</span> <small>(gebruiker <code>{{ cfg.auth.user }}</code>)</small>
+        {% else %}
+          <span class="err">✗ niet beveiligd</span>
+          <small>— zet <code>APP_USER</code> en <code>APP_PASSWORD</code> in je docker-compose (zie README)</small>
+        {% endif %}
+      </span>
+      <span>API-token voor Home Assistant:
+        {% if cfg.auth.token_enabled %}
+          <span class="ok">✓ actief</span>
+        {% elif cfg.auth.ui_enabled %}
+          <span class="muted">niet ingesteld</span> <small>— HA gebruikt dan Basic Auth</small>
+        {% else %}
+          <span class="muted">niet ingesteld</span>
+        {% endif %}
+      </span>
+      <span>Master key:
+        {% if cfg.key_source == 'env' %}
+          <span class="ok">✓ uit omgevingsvariabele</span> <small>(<code>MASTER_KEY</code>, staat niet in config.yaml)</small>
+        {% elif cfg.key_source == 'config' %}
+          <span class="ok">✓ aanwezig</span> <small>in config.yaml — verplaats hem naar <code>MASTER_KEY</code> voor extra veiligheid (README)</small>
+        {% else %}
+          <span class="err">✗ ontbreekt</span>
+        {% endif %}
+      </span>
+    </div>
+  </div>
+
   <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
     <span>
       Master key:
