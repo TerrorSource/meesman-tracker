@@ -46,6 +46,7 @@ EXPORT_PATH        = Path(os.environ.get("EXPORT_PATH",        str(DATA_DIR / "e
 SESSION_STATE_PATH = Path(os.environ.get("SESSION_STATE_PATH", str(DATA_DIR / "session.json")))
 COOKIES_DUMP_PATH  = Path(os.environ.get("COOKIES_DUMP_PATH",  str(DATA_DIR / "cookies.json")))
 DEPOSITS_PATH      = Path(os.environ.get("DEPOSITS_PATH",      str(DATA_DIR / "deposits.json")))
+DEBUG_DIR          = Path(os.environ.get("DEBUG_DIR",          str(DATA_DIR / "debug")))
 
 # ---------------------------------------------------------------------------
 # DB + templates (singletons)
@@ -55,6 +56,27 @@ init_db(engine)
 
 templates = Jinja2Templates(directory="app/templates")
 templates.env.globals["app_version"] = APP_VERSION_FULL
+
+
+def fmt_local(ts, fmt: str = "%d-%m-%Y %H:%M") -> str:
+    """ISO-tijdstip (UTC) → leesbare lokale tijd voor templates: '13-08-2026 09:14'."""
+    if not ts:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(ts))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(LOCAL_TZ).strftime(fmt)
+    except Exception:
+        return str(ts)
+
+
+def fmt_local_date(ts) -> str:
+    return fmt_local(ts, "%d-%m-%Y")
+
+
+templates.env.filters["local"]      = fmt_local
+templates.env.filters["local_date"] = fmt_local_date
 
 
 # ---------------------------------------------------------------------------

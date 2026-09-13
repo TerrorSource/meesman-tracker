@@ -14,10 +14,34 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------
+  # Rooktests: de app opstarten met TestClient en alle routes + kernlogica
+  # doorlopen. Faalt dit, dan wordt er geen image gebouwd.
+  # ---------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q tests/
+
+  # ---------------------------------------------------------------------
   # Bouw per platform op een native runner (geen trage QEMU-emulatie)
   # en push per digest; de merge-job maakt er één multi-arch manifest van.
   # ---------------------------------------------------------------------
   build:
+    needs: test
     strategy:
       fail-fast: false
       matrix:

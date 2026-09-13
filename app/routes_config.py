@@ -11,6 +11,7 @@ from .config_store import load_config, save_config
 from .core import cfg_has_key, decrypt_if_present, engine, logger, templates
 from .scheduler import scheduler
 from .security import encrypt_str, get_or_create_master_key
+from .service_refresh import build_refresh_trigger
 from .telegram import send_telegram
 
 router = APIRouter()
@@ -23,6 +24,7 @@ def config_page(request: Request):
     view = {
         "has_key":          cfg_has_key(cfg),
         "username":         cfg.get("username") or "",
+        "refresh_time":     cfg.get("refresh_time") or "",
         "refresh_hours":    cfg.get("refresh_hours") or 24,
         "keepalive_minutes": cfg.get("keepalive_minutes") or 30,
         "password_set":     bool((cfg.get("password_enc") or "").strip()),
@@ -56,6 +58,7 @@ def generate_key():
 def config_save(
     username:          str = Form(""),
     password:          str = Form(""),
+    refresh_time:      str = Form(""),
     refresh_hours:     int = Form(24),
     keepalive_minutes: int = Form(30),
     mfa_mode:          str = Form("manual"),
@@ -79,7 +82,17 @@ def config_save(
         except Exception:
             return RedirectResponse(url="/config?error=bad_totp", status_code=303)
 
+    # Vaste refresh-tijd: leeg = intervalmodus, anders geldige HH:MM
+    refresh_time = (refresh_time or "").strip()
+    if refresh_time:
+        import re as _re
+        m = _re.fullmatch(r"(\d{1,2}):(\d{2})", refresh_time)
+        if not (m and 0 <= int(m.group(1)) < 24 and 0 <= int(m.group(2)) < 60):
+            return RedirectResponse(url="/config?error=bad_time", status_code=303)
+        refresh_time = f"{int(m.group(1)):02d}:{m.group(2)}"
+
     cfg["username"]          = username.strip()
+    cfg["refresh_time"]      = refresh_time
     cfg["refresh_hours"]     = max(1, int(refresh_hours))
     cfg["keepalive_minutes"] = max(5, int(keepalive_minutes))
     cfg["mfa_mode"]          = mfa_mode.strip() or "manual"
@@ -104,10 +117,11 @@ def config_save(
     except Exception as e:
         logger.warning("Keepalive-log leegmaken mislukt: %s", e)
 
-    scheduler.reschedule_job("refresh_job",   trigger="interval", hours=max(1, int(refresh_hours)))
+    trigger, desc = build_refresh_trigger(cfg)
+    scheduler.reschedule_job("refresh_job",   trigger=trigger)
     scheduler.reschedule_job("keepalive_job", trigger="interval", minutes=max(5, int(keepalive_minutes)))
-    logger.info("Config opgeslagen. refresh=%dh keepalive=%dmin mfa_mode=%s",
-                max(1, int(refresh_hours)), max(5, int(keepalive_minutes)), mfa_mode)
+    logger.info("Config opgeslagen. refresh %s, keepalive=%dmin, mfa_mode=%s",
+                desc, max(5, int(keepalive_minutes)), mfa_mode)
 
     return RedirectResponse(url="/config?saved=1", status_code=303)
 

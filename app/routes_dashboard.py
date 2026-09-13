@@ -19,7 +19,16 @@ from .core import (
     to_float,
 )
 from .service_refresh import refresh_once
-from .store import get_deposits, read_cookie_dump_summary, write_export_json
+from .store import (
+    get_deposits,
+    last_ok_refresh_dt,
+    last_refresh_info,
+    read_cookie_dump_summary,
+    write_export_json,
+)
+
+# Ouder dan dit (uren) zonder geslaagde refresh → /health meldt 'degraded'
+HEALTH_STALE_HOURS = 48
 
 router = APIRouter()
 
@@ -106,8 +115,31 @@ def dashboard(request: Request):
 
 @router.get("/health")
 def health():
-    """Healthcheck voor Docker/NAS."""
-    return JSONResponse({"status": "ok", "version": APP_VERSION_FULL, "time": now_iso()})
+    """
+    Healthcheck voor Docker/NAS. Altijd HTTP 200 (een falende Meesman-scrape
+    is geen reden om de container te herstarten), maar 'status' wordt
+    'degraded' als de laatste refresh faalde of de laatste geslaagde
+    refresh te oud is — zo zie je in één blik of de data nog stroomt.
+    """
+    last_ok = last_ok_refresh_dt()
+    info    = last_refresh_info()
+    age_h   = ((datetime.now(timezone.utc) - last_ok).total_seconds() / 3600) if last_ok else None
+
+    degraded = (
+        last_ok is None
+        or age_h > HEALTH_STALE_HOURS
+        or (info is not None and info.get("status") == "failed")
+    )
+
+    return JSONResponse({
+        "status":               "degraded" if degraded else "ok",
+        "version":              APP_VERSION_FULL,
+        "time":                 now_iso(),
+        "last_ok_refresh":      last_ok.isoformat() if last_ok else None,
+        "last_ok_age_hours":    round(age_h, 1) if age_h is not None else None,
+        "last_refresh_status":  info.get("status") if info else None,
+        "last_refresh_message": (info.get("message") or None) if info else None,
+    })
 
 
 @router.post("/datapoints/delete")

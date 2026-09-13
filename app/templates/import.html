@@ -72,7 +72,7 @@
 
   {% if manual_inserted is defined and manual_inserted == 1 %}
     <p class="ok" style="margin-bottom:12px">
-      ✓ Toegevoegd: <strong>{{ manual_account }}</strong> op {{ manual_ts }} — € {{ "%.2f"|format(manual_value) }}
+      ✓ Toegevoegd: <strong>{{ manual_account }}</strong> op {{ manual_ts | local }} — € {{ "%.2f"|format(manual_value) }}
       &nbsp;<a href="/" style="font-weight:600">→ Bekijk dashboard</a>
     </p>
   {% endif %}

@@ -6,8 +6,12 @@ from datetime import datetime, timezone
 
 from sqlalchemy import text
 
+from datetime import timedelta
+from pathlib import Path
+
 from .core import (
     COOKIES_DUMP_PATH,
+    DEBUG_DIR,
     DEPOSITS_PATH,
     EXPORT_PATH,
     engine,
@@ -17,16 +21,62 @@ from .core import (
     to_float,
 )
 
+# Foutmeldingen inkorten: een Chromium-commandoregel van 3 KB heeft geen
+# nut in de database of op het dashboard.
+_MAX_LOG_MESSAGE = 500
+
 
 # ---------------------------------------------------------------------------
 # Logtabellen
 # ---------------------------------------------------------------------------
 def write_refresh_log(status: str, stored_rows: int, message: str | None = None) -> None:
+    if message and len(message) > _MAX_LOG_MESSAGE:
+        message = message[:_MAX_LOG_MESSAGE] + " …"
     with engine.begin() as conn:
         conn.execute(
             text("INSERT INTO refresh_log (ts, status, stored_rows, message) VALUES (:ts, :st, :n, :msg)"),
             {"ts": now_iso(), "st": status, "n": int(stored_rows), "msg": message},
         )
+
+
+def last_refresh_info() -> dict | None:
+    """Laatste refresh-log-regel (ts, status, message) of None."""
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "SELECT ts, status, stored_rows, message FROM refresh_log ORDER BY id DESC LIMIT 1"
+        )).mappings().first()
+    return dict(row) if row else None
+
+
+def prune_old_logs(days: int = 90) -> int:
+    """Verwijder log-regels ouder dan `days` (tabellen groeien anders onbegrensd)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    total = 0
+    with engine.begin() as conn:
+        for table in ("refresh_log", "keepalive_log"):
+            res = conn.execute(text(f"DELETE FROM {table} WHERE ts < :c"), {"c": cutoff})
+            total += res.rowcount or 0
+    if total:
+        logger.info("Log-opschoning: %d regels ouder dan %d dagen verwijderd", total, days)
+    return total
+
+
+def prune_debug_files(days: int = 30) -> int:
+    """Verwijder debug-dumps (screenshots/HTML met saldi) ouder dan `days`."""
+    if not DEBUG_DIR.exists():
+        return 0
+    cutoff = datetime.now(timezone.utc).timestamp() - days * 86400
+    removed = 0
+    for p in DEBUG_DIR.iterdir():
+        try:
+            if p.is_file() and p.stat().st_mtime < cutoff:
+                p.unlink()
+                removed += 1
+        except Exception:
+            pass
+    if removed:
+        logger.info("Debug-opschoning: %d bestanden ouder dan %d dagen verwijderd", removed, days)
+    return removed
 
 
 def write_keepalive_log(status: str, message: str | None = None) -> None:
@@ -83,6 +133,59 @@ def get_prev_values() -> dict[str, float]:
             )
         """)).mappings().all()
     return {r["account_number"]: to_float(r["value_eur"]) for r in rows}
+
+
+def snapshot_values_at(dt: datetime) -> dict[str, float]:
+    """Laatst bekende waarde per rekening op of vóór tijdstip `dt`."""
+    iso = dt.astimezone(timezone.utc).isoformat()
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT account_number, value_eur
+            FROM accounts_snapshot
+            WHERE id IN (
+                SELECT MAX(id) FROM accounts_snapshot
+                WHERE ts <= :ts GROUP BY account_number
+            )
+        """), {"ts": iso}).mappings().all()
+    return {r["account_number"]: to_float(r["value_eur"]) for r in rows}
+
+
+def snapshot_values_first_from(dt: datetime) -> dict[str, float]:
+    """Eerste bekende waarde per rekening op of ná tijdstip `dt` (voor
+    rekeningen die pas ná een peildatum zijn begonnen)."""
+    iso = dt.astimezone(timezone.utc).isoformat()
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT account_number, value_eur
+            FROM accounts_snapshot
+            WHERE id IN (
+                SELECT MIN(id) FROM accounts_snapshot
+                WHERE ts >= :ts GROUP BY account_number
+            )
+        """), {"ts": iso}).mappings().all()
+    return {r["account_number"]: to_float(r["value_eur"]) for r in rows}
+
+
+def account_labels() -> dict[str, str]:
+    """Meest recente label per rekening."""
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT account_number, label
+            FROM accounts_snapshot
+            WHERE id IN (SELECT MAX(id) FROM accounts_snapshot GROUP BY account_number)
+        """)).mappings().all()
+    return {r["account_number"]: r["label"] for r in rows}
+
+
+def deposits_sum_between(start: datetime, end: datetime) -> float:
+    """Som van de inleg met start <= ts < end."""
+    a = start.astimezone(timezone.utc).isoformat()
+    b = end.astimezone(timezone.utc).isoformat()
+    with engine.begin() as conn:
+        row = conn.execute(text(
+            "SELECT COALESCE(SUM(amount_eur), 0) FROM deposits WHERE ts >= :a AND ts < :b"
+        ), {"a": a, "b": b}).first()
+    return to_float(row[0]) if row else 0.0
 
 
 # ---------------------------------------------------------------------------

@@ -5,40 +5,67 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config_store import load_config
-from .core import APP_VERSION_FULL, cfg_has_key, logger
+from .core import APP_VERSION_FULL, LOCAL_TZ, cfg_has_key, logger
 from .scheduler import scheduler
-from .service_refresh import keepalive_tick, refresh_once
-from .store import last_ok_refresh_dt, restore_deposits_from_json, write_export_json
+from .service_refresh import (
+    build_refresh_trigger,
+    keepalive_tick,
+    monthly_summary_tick,
+    refresh_once,
+    refresh_stale_threshold_hours,
+)
+from .store import (
+    last_ok_refresh_dt,
+    prune_debug_files,
+    prune_old_logs,
+    restore_deposits_from_json,
+    write_export_json,
+)
 from . import routes_api, routes_config, routes_dashboard, routes_deposits, routes_import
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cfg = load_config()
-    hours             = max(1, int(cfg.get("refresh_hours")     or 24))
     keepalive_minutes = max(5, int(cfg.get("keepalive_minutes") or 30))
+    refresh_trigger, refresh_desc = build_refresh_trigger(cfg)
 
-    scheduler.add_job(refresh_once,   "interval", hours=hours,
-                      id="refresh_job",   replace_existing=True,
+    scheduler.add_job(refresh_once, refresh_trigger,
+                      id="refresh_job", replace_existing=True,
                       coalesce=True, misfire_grace_time=3600)
     scheduler.add_job(keepalive_tick, "interval", minutes=keepalive_minutes,
                       id="keepalive_job", replace_existing=True,
                       coalesce=True, misfire_grace_time=600)
+    # Maandoverzicht: 1e van de maand om 08:00 lokale tijd
+    scheduler.add_job(monthly_summary_tick,
+                      CronTrigger(day=1, hour=8, minute=0, timezone=LOCAL_TZ),
+                      id="monthly_summary", replace_existing=True,
+                      coalesce=True, misfire_grace_time=6 * 3600)
     scheduler.start()
-    logger.info("Scheduler started (refresh=%dh, keepalive=%dmin, versie=%s)",
-                hours, keepalive_minutes, APP_VERSION_FULL)
+    logger.info("Scheduler started (refresh %s, keepalive=%dmin, versie=%s)",
+                refresh_desc, keepalive_minutes, APP_VERSION_FULL)
+    if cfg.get("mfa_mode") == "totp":
+        logger.info("Keepalive is uitgeschakeld in TOTP-modus (de refresh logt zelf opnieuw in).")
+
+    # Opschonen: logtabellen (90 dagen) en debug-dumps met saldi (30 dagen)
+    try:
+        prune_old_logs(days=90)
+        prune_debug_files(days=30)
+    except Exception as e:
+        logger.warning("Startup: opschonen mislukt: %s", e)
 
     # Inhaal-refresh: na een (her)start direct verversen als de laatste
-    # geslaagde refresh ouder is dan het interval — anders schuift het
-    # meetmoment bij elke deploy op en mis je dagen
+    # geslaagde refresh te oud is — anders mis je dagen bij elke deploy
     try:
         last_ok = last_ok_refresh_dt()
-        stale = last_ok is None or (datetime.now(timezone.utc) - last_ok) > timedelta(hours=hours)
+        threshold = timedelta(hours=refresh_stale_threshold_hours(cfg))
+        stale = last_ok is None or (datetime.now(timezone.utc) - last_ok) > threshold
         if cfg_has_key(cfg) and stale:
             scheduler.add_job(
                 refresh_once, "date",

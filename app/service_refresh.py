@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import text
 
 from .config_store import load_config
 from .core import (
     COOKIES_DUMP_PATH,
+    LOCAL_TZ,
     SESSION_STATE_PATH,
     cfg_has_key,
     decrypt_if_present,
@@ -15,7 +20,12 @@ from .core import (
     logger,
     now_iso,
 )
-from .scraper import fetch_accounts, http_session_check, keepalive_session
+from .scraper import (
+    fetch_accounts,
+    http_session_check,
+    is_browser_launch_failure,
+    keepalive_session,
+)
 from .store import (
     consecutive_failed_refreshes,
     get_prev_values,
@@ -23,7 +33,12 @@ from .store import (
     write_keepalive_log,
     write_refresh_log,
 )
-from .telegram import build_balance_change_message, send_telegram, telegram_enabled
+from .telegram import (
+    build_balance_change_message,
+    build_monthly_summary,
+    send_telegram,
+    telegram_enabled,
+)
 
 # Eén scrape tegelijk (refresh, keepalive of handmatige refresh)
 scrape_lock = asyncio.Lock()
@@ -35,8 +50,38 @@ FAIL_ALERT_THRESHOLD = 3
 # tussendoor volstaat een lichte HTTP-check
 BROWSER_KEEPALIVE_EVERY = 8
 _keepalive_tick_count = 0
+_keepalive_skip_logged = False
+
+# Bij een Chromium-launch-fout (omgevingsprobleem) de container laten
+# herstarten via de restart-policy. Uit te zetten met SELF_RESTART=0.
+SELF_RESTART_ON_LAUNCH_FAILURE = os.environ.get("SELF_RESTART", "1") != "0"
 
 
+# ---------------------------------------------------------------------------
+# Scheduler-trigger voor de refresh
+# ---------------------------------------------------------------------------
+def build_refresh_trigger(cfg: dict):
+    """Cron op een vaste lokale kloktijd (refresh_time 'HH:MM'), anders
+    terugvallen op het interval in refresh_hours. Returnt (trigger, omschrijving)."""
+    t = (cfg.get("refresh_time") or "").strip()
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", t)
+    if m and 0 <= int(m.group(1)) < 24 and 0 <= int(m.group(2)) < 60:
+        hh, mm = int(m.group(1)), int(m.group(2))
+        return CronTrigger(hour=hh, minute=mm, timezone=LOCAL_TZ), f"dagelijks om {hh:02d}:{mm:02d}"
+    hours = max(1, int(cfg.get("refresh_hours") or 24))
+    return IntervalTrigger(hours=hours), f"elke {hours} uur"
+
+
+def refresh_stale_threshold_hours(cfg: dict) -> float:
+    """Na hoeveel uur zonder geslaagde refresh een catch-up nodig is."""
+    if (cfg.get("refresh_time") or "").strip():
+        return 26.0  # dagelijkse cron + marge
+    return float(max(1, int(cfg.get("refresh_hours") or 24)))
+
+
+# ---------------------------------------------------------------------------
+# Refresh
+# ---------------------------------------------------------------------------
 async def refresh_once() -> bool:
     """Geserialiseerde refresh: hooguit één scrape tegelijk. Returnt True bij succes."""
     async with scrape_lock:
@@ -57,6 +102,25 @@ async def _alert_if_failing(cfg: dict) -> None:
             "gewijzigde Meesman-site (selectors), verlopen wachtwoord of netwerkproblemen.",
         )
         logger.info("Telegram faal-alert verzonden: ok=%s info=%s", ok, info)
+
+
+async def _handle_launch_failure(cfg: dict, context: str) -> None:
+    """Chromium kon niet starten: direct alerten (dit lost zichzelf niet op)
+    en — tenzij uitgeschakeld — het proces beëindigen zodat Docker de
+    container schoon herstart (verse PID-namespace, geen zombies)."""
+    logger.critical("%s: Chromium kon niet starten — omgevingsprobleem op de host.", context)
+    if telegram_enabled(cfg):
+        await asyncio.to_thread(
+            send_telegram, cfg,
+            "🚨 Meesman-tracker: de browser (Chromium) kan niet meer starten.\n\n"
+            + ("De container wordt nu automatisch herstart. Blijft dit terugkomen, "
+               "controleer dan geheugen en schijfruimte op de NAS."
+               if SELF_RESTART_ON_LAUNCH_FAILURE else
+               "Herstart de container handmatig (docker restart meesman-tracker)."),
+        )
+    if SELF_RESTART_ON_LAUNCH_FAILURE:
+        logger.critical("Zelf-herstart over 5 seconden (SELF_RESTART=0 om uit te zetten).")
+        asyncio.get_running_loop().call_later(5, os._exit, 3)
 
 
 async def _do_refresh() -> bool:
@@ -171,21 +235,37 @@ async def _do_refresh() -> bool:
         msg = f"Onverwachte fout: {type(e).__name__}: {e}"
         logger.exception("Refresh: %s", msg)
         write_refresh_log("failed", 0, msg)
-        await _alert_if_failing(cfg)
+        if is_browser_launch_failure(e):
+            await _handle_launch_failure(cfg, "Refresh")
+        else:
+            await _alert_if_failing(cfg)
         return False
 
 
+# ---------------------------------------------------------------------------
+# Keepalive
+# ---------------------------------------------------------------------------
 async def keepalive_tick() -> None:
     """
-    Houd de sessie warm. Meestal volstaat een lichte HTTP-check op de
-    opgeslagen cookies; elke N-de tick (en bij twijfel) draait de echte
-    browser, die ook de sessie-state ververst.
-    Bij een verlopen sessie + TOTP wordt automatisch opnieuw ingelogd.
+    Houd de sessie warm. Alleen zinvol bij handmatige MFA: met TOTP logt de
+    dagelijkse refresh zelf opnieuw in, en elke extra browserstart is dan
+    alleen maar belasting (en risico) op de NAS.
+
+    Meestal volstaat een lichte HTTP-check op de opgeslagen cookies; elke
+    N-de tick (en bij twijfel) draait de echte browser, die ook de
+    sessie-state ververst.
     """
-    global _keepalive_tick_count
+    global _keepalive_tick_count, _keepalive_skip_logged
     cfg = load_config()
     if not cfg_has_key(cfg):
         return
+
+    if cfg.get("mfa_mode", "manual") == "totp":
+        if not _keepalive_skip_logged:
+            logger.info("Keepalive: overgeslagen — TOTP-modus, de refresh logt zelf opnieuw in.")
+            _keepalive_skip_logged = True
+        return
+    _keepalive_skip_logged = False
 
     _keepalive_tick_count += 1
     use_browser = (_keepalive_tick_count % BROWSER_KEEPALIVE_EVERY == 1)
@@ -202,12 +282,19 @@ async def keepalive_tick() -> None:
     try:
         async with scrape_lock:
             ok = await keepalive_session(
-                {"accounts_row_selector": sels.get("accounts_row_selector", "")},
+                {
+                    "accounts_row_selector": sels.get("accounts_row_selector", ""),
+                    "login_user_selector":   sels.get("login_user_selector", ""),
+                },
                 storage_state_path=str(SESSION_STATE_PATH),
                 dump_cookies_path=str(COOKIES_DUMP_PATH),
             )
     except Exception as e:
         logger.warning("Keepalive: onverwachte fout: %s", e)
+        if is_browser_launch_failure(e):
+            write_keepalive_log("failed", "Chromium kon niet starten")
+            await _handle_launch_failure(cfg, "Keepalive")
+            return
         ok = False
 
     if ok:
@@ -239,3 +326,23 @@ async def keepalive_tick() -> None:
             "⚠️ Meesman-tracker: sessie verlopen.\n\n"
             "Open /config, voer een nieuwe MFA-code in, sla op en klik op 'Refresh now'.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Maandoverzicht
+# ---------------------------------------------------------------------------
+async def monthly_summary_tick() -> None:
+    """Stuur op de 1e van de maand een Telegram-overzicht van de afgelopen maand."""
+    cfg = load_config()
+    if not telegram_enabled(cfg):
+        return
+    try:
+        msg = build_monthly_summary()
+    except Exception as e:
+        logger.warning("Maandoverzicht opbouwen mislukt: %s", e)
+        return
+    if not msg:
+        logger.info("Maandoverzicht: nog geen data, overgeslagen.")
+        return
+    ok, info = await asyncio.to_thread(send_telegram, cfg, msg)
+    logger.info("Telegram maandoverzicht: ok=%s info=%s", ok, info)

@@ -8,18 +8,21 @@ A self-hosted Docker application that automatically logs into [mijn.meesman.nl](
 
 ## Features
 
-- **Automatic balance scraping** via Playwright (headless Chromium)
+- **Automatic balance scraping** via Playwright (chromium-headless-shell)
 - **TOTP support** — fully unattended, no manual MFA codes needed
-- **Lightweight session keepalive** — HTTP cookie check (full browser only every Nth tick), auto re-login via TOTP on expiry
-- **Catch-up refresh** — refreshes right after a (re)start when the last successful refresh is older than the interval
-- **Dashboard** with charts, balance history, return per account and a configurable growth baseline date; individual data points can be deleted from the changes table
+- **Scheduled refresh at a fixed local time** (default 07:30) with catch-up after a (re)start; interval mode as fallback
+- **Self-healing** — retries with a fresh browser context when a stale session blocks the login; restarts the container when Chromium itself can no longer start
+- **Session keepalive** for manual-MFA mode (HTTP cookie check, full browser only every Nth tick); skipped entirely in TOTP mode
+- **Dashboard** with charts (1m / 3m / 1y / all), balance history, return per account and a configurable growth baseline date; individual data points can be deleted from the changes table
 - **Deposit tracking** — add, edit and delete deposits; distinguish your own deposits from actual investment returns
 - **Home Assistant REST API** — `/api/sensors` and `/deposits.json`
 - **CSV export** — `/export.csv` and `/deposits.csv` (Dutch Excel format)
-- **Telegram notifications** on balance change, session expiry, and repeated refresh failures (incl. recovery)
+- **Telegram notifications** on balance change, session expiry, repeated refresh failures (incl. recovery), browser failures, and a monthly summary
 - **Import** of historical `export.json` and `deposits.json` files
 - **Manual data points** — add historical balances for any date
-- **Health endpoint** (`/health`) with the running app version, also shown in the page footer
+- **Health endpoint** (`/health`) with app version and `ok`/`degraded` status based on the last successful refresh
+- **Selector canary** — a daily GitHub Action checks whether the Meesman login page still matches the scraper's selectors
+- **Automatic housekeeping** — log tables (90 days) and debug dumps (30 days) are pruned at startup
 
 ---
 
@@ -109,7 +112,8 @@ After the container is running, open `http://<host>:8080/config`:
    - **TOTP (recommended):** Find the base32 secret in your authenticator app under "manual entry". Enter it in the *TOTP secret* field. The app will generate codes automatically from now on.
    - **Manual code:** Enter a fresh code just before clicking Save, then immediately click *↻ Refresh now*.
 4. **Telegram** (optional) — enter your bot token and chat ID to receive balance change notifications.
-5. Click **Save** → **↻ Refresh now**
+5. **Planning** — the daily refresh time defaults to 07:30 local time (Meesman updates prices once per trading day). Clear it to fall back to an interval in hours.
+6. Click **Save** → **↻ Refresh now**
 
 ---
 
@@ -123,7 +127,8 @@ Keep the contents of your `data/` volume — that is all you need:
 | `data/export.json` | Full balance history |
 | `data/deposits.json` | All deposit records |
 | `data/session.json` | Playwright session state (optional, speeds up first login) |
-| `data/cookies.json` | Browser cookies (optional) |
+| `data/cookies.json` | Cookie metadata for the session page (optional) |
+| `data/app.db` (+ `app.db-wal`, `app.db-shm`) | SQLite database. It runs in WAL mode: when backing up a *running* container, copy all three files together, or stop the container first |
 
 **Steps (prebuilt image from ghcr.io — default `docker-compose.yml`):**
 ```bash
@@ -251,6 +256,7 @@ sensor:
 | `COOKIES_DUMP_PATH` | `/data/cookies.json` | Cookie dump for the session page |
 | `DEBUG_DIR` | `/data/debug` | Screenshots on scrape failure |
 | `APP_VERSION` / `APP_COMMIT` | `dev` / empty | Set by CI as build args; shown in the footer and `/health` |
+| `SELF_RESTART` | `1` | When Chromium cannot start (host problem), exit the process so Docker restarts the container cleanly. Set to `0` to disable |
 
 ---
 
@@ -261,6 +267,8 @@ The app sends a message automatically on:
 - **Balance change** — per account with previous/current value, delta and percentage
 - **Session expired** — only when using manual MFA; with TOTP the app re-logins automatically
 - **Repeated refresh failures** — one warning after 3 consecutive failed refreshes, and a recovery message once refreshing works again
+- **Browser failure** — immediately, when Chromium itself cannot start (a host problem such as memory pressure); the container then restarts itself
+- **Monthly summary** — on the 1st of each month at 08:00: total value, deposits and return for the previous month per account, plus the year-to-date return after deposits
 
 Example message:
 ```
@@ -273,6 +281,15 @@ Example message:
 
 💰 Totaal: € 45.500,00 (+€ 500,00, +0,26%)
 ```
+
+---
+
+## Development, tests and CI
+
+- **Tests:** `pip install -r requirements-dev.txt && pytest -q tests/` — parser/formatting unit tests plus smoke tests that boot the app with a temporary data directory and exercise every route. The same suite runs in GitHub Actions before every image build.
+- **Selector canary:** `.github/workflows/selector-canary.yml` opens the Meesman login page daily and fails (→ GitHub notification e-mail) when the login selectors from `app/config_store.py` are gone. It never logs in.
+- **Upgrading Playwright:** a new Playwright means a new Chromium. Bump the version in `requirements.txt` *and* in the canary workflow, then verify locally (`docker build .`, start the container, and launch Chromium once inside it) before pushing. Dependabot is configured to only propose patch updates for Playwright for this reason.
+- **Meesman API research:** every refresh writes `data/debug/api_capture.json` — the URL, status and a 2 KB preview of each JSON response the browser received from `*.meesman.nl`. If the account overview turns out to be available as JSON, scraping can move from DOM parsing to a direct API call (far more robust; Chromium would only be needed for the login).
 
 ---
 
@@ -309,13 +326,18 @@ meesman-tracker/
 │   │   └── vendor/          # Locally vendored Chart.js (works offline)
 │   └── templates/           # Jinja2 HTML templates
 ├── data/                    # Mounted volume — never committed to Git
+├── tests/                   # pytest suite (parsers + smoke tests via TestClient)
+├── scripts/
+│   └── selector_canary.py   # Daily check of the Meesman login selectors
 ├── .github/
-│   ├── workflows/docker.yml # Multi-arch build (native amd64 + arm64 runners)
-│   └── dependabot.yml       # Weekly dependency update PRs
-├── Dockerfile
+│   ├── workflows/docker.yml           # Tests → multi-arch build (native amd64 + arm64)
+│   ├── workflows/selector-canary.yml  # Daily Meesman selector check
+│   └── dependabot.yml                 # Weekly dependency update PRs
+├── Dockerfile               # tini as PID 1, chromium-headless-shell
 ├── docker-compose.yml       # Prebuilt image from ghcr.io
 ├── docker-compose.build.yml # Local development build
-└── requirements.txt
+├── requirements.txt
+└── requirements-dev.txt     # + pytest/httpx for the tests
 ```
 
 ---

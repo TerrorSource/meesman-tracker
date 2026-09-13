@@ -10,6 +10,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "master_key": "",
     "username": "",
     "password_enc": "",
+    # Vaste dagelijkse refresh-tijd (lokale TZ, "HH:MM"). Leeg = terugvallen
+    # op het interval in refresh_hours.
+    "refresh_time": "07:30",
     "refresh_hours": 24,
     "keepalive_minutes": 30,
 

@@ -6,13 +6,15 @@
 
   {% if last_refresh %}
     <p style="margin:0">
-      <strong>Laatste refresh:</strong> {{ last_refresh.ts }}&nbsp;—&nbsp;
+      <strong>Laatste refresh:</strong> {{ last_refresh.ts | local }}&nbsp;—&nbsp;
       <strong>Status:</strong>
       <span class="{{ 'ok' if last_refresh.status == 'ok' else 'err' }}">{{ last_refresh.status }}</span>
       &nbsp;—&nbsp;<strong>Opgeslagen:</strong> {{ last_refresh.stored_rows }} rij(en)
     </p>
     {% if last_refresh.message %}
-      <p class="err" style="margin:6px 0 0"><strong>Reden:</strong> {{ last_refresh.message }}</p>
+      <p class="err" style="margin:6px 0 0; word-break:break-word" title="{{ last_refresh.message }}">
+        <strong>Reden:</strong> {{ last_refresh.message | truncate(300) }}
+      </p>
     {% endif %}
   {% else %}
     <p style="margin:0"><strong>Laatste refresh:</strong> nog geen</p>
@@ -38,6 +40,13 @@
     <span>Groei sinds:</span>
     <input type="date" id="baseline-date" style="width:auto; padding:4px 8px; font-size:12px" />
     <button type="button" id="baseline-reset" style="font-size:12px; padding:4px 8px">↺ Eerste meting</button>
+    <span style="margin-left:16px">Grafiek:</span>
+    <span id="period-buttons" style="display:inline-flex; gap:4px">
+      <button type="button" data-days="30"  style="font-size:12px; padding:4px 8px">1m</button>
+      <button type="button" data-days="90"  style="font-size:12px; padding:4px 8px">3m</button>
+      <button type="button" data-days="365" style="font-size:12px; padding:4px 8px">1j</button>
+      <button type="button" data-days="0"   style="font-size:12px; padding:4px 8px">alles</button>
+    </span>
   </div>
 </div>
 

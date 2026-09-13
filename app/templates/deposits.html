@@ -93,7 +93,7 @@
     <tbody>
       {% for d in deposits %}
       <tr>
-        <td style="color:#555">{{ d.ts[:10] }}</td>
+        <td style="color:#555">{{ d.ts | local_date }}</td>
         <td>{{ d.label }} <small style="color:#aaa">({{ d.account_number }})</small></td>
         <td style="text-align:right; font-weight:600">
           € {{ "{:,.2f}".format(d.amount_eur|float).replace(",", "X").replace(".", ",").replace("X", ".") }}
