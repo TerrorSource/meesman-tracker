@@ -192,6 +192,10 @@
           <input type="checkbox" name="weekly_summary" value="1" {{ 'checked' if cfg.weekly_summary else '' }} style="width:auto" />
           Weekoverzicht (maandag, 08:00)
         </label>
+        <label style="font-weight:normal; display:flex; gap:8px; align-items:center; margin-top:6px; cursor:pointer">
+          <input type="checkbox" name="notify_messages" value="1" {{ 'checked' if cfg.notify_messages else '' }} style="width:auto" />
+          Nieuwe berichten in je Meesman-inbox melden
+        </label>
       </div>
     </div>
   </div>

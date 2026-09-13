@@ -46,6 +46,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "fail_alert_threshold": 3,   # Telegram-alert na N opeenvolgende mislukte refreshes
     "monthly_summary": True,     # 1e van de maand 08:00
     "weekly_summary": False,     # maandag 08:00
+    "notify_messages": True,     # nieuwe berichten in de Meesman-inbox melden
 
     # Backups: dagelijkse databasekopie in data/backups, zoveel bewaren
     "backup_keep": 14,

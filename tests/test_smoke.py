@@ -110,6 +110,7 @@ def test_config_validation_and_new_settings(client):
     assert cfg["notify_min_eur"] == 10.5 and cfg["notify_min_pct"] == 0.25
     assert cfg["fail_alert_threshold"] == 2 and cfg["weekly_summary"] is True
     assert cfg["monthly_summary"] is False          # checkbox niet meegestuurd = uit
+    assert cfg["notify_messages"] is False
     assert cfg["backup_keep"] == 7
     assert cfg["selectors"]["accounts_row_selector"] == "table.custom tr"
     assert cfg["selectors"]["login_user_selector"] == DEFAULT_SELECTORS["login_user_selector"]  # leeg → standaard
@@ -260,3 +261,18 @@ def test_refresh_log_duration_and_history_page(client):
     assert client.get("/health").json()["status"] == "ok"
     html = client.get("/session").text
     assert "Refresh-geschiedenis" in html and "12.3 s" in html and "Uitgeschakeld in TOTP-modus" in html
+
+
+def test_meesman_messages_sync_first_seed_then_new(client):
+    from app.store import recent_meesman_messages, sync_meesman_messages
+    inbox = [{"id": 747222, "title": "Dividenduitkering", "created_at": "2026-07-03T10:41:30.95", "read_state": "Read", "type": "General", "important": False},
+             {"id": 563005, "title": "Jaaroverzicht 2025", "created_at": "2026-01-30T14:14:14.5", "read_state": "Read", "type": "General", "important": False}]
+    assert sync_meesman_messages(inbox) == []                       # eerste sync: stil overnemen
+    assert sync_meesman_messages(inbox) == []                       # niets nieuws
+    new = sync_meesman_messages(inbox + [{"id": 800001, "title": "Nieuwe voorwaarden", "created_at": "2026-09-10T09:00:00", "read_state": "Unread", "type": "General", "important": True}])
+    assert [m["id"] for m in new] == [800001]
+    assert sync_meesman_messages([]) == []
+    recent = recent_meesman_messages(10)
+    assert recent[0]["title"] == "Nieuwe voorwaarden" and len(recent) == 3
+    html = client.get("/session").text
+    assert "Meesman-berichten" in html and "Nieuwe voorwaarden" in html and "10-09-2026" in html

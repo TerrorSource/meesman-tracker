@@ -294,6 +294,48 @@ def update_missing_accounts(present: set[str]) -> tuple[list[str], list[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Meesman-inbox
+# ---------------------------------------------------------------------------
+def sync_meesman_messages(messages: list[dict]) -> list[dict]:
+    """Sla nog onbekende Meesman-berichten op en returnt die (nieuwste eerst).
+    Bij de allereerste sync wordt de bestaande inbox stil overgenomen — anders
+    krijg je in één keer alle oude berichten als 'nieuw' gemeld."""
+    if not messages:
+        return []
+    now = now_iso()
+    with engine.begin() as conn:
+        existing = {r[0] for r in conn.execute(text("SELECT id FROM meesman_messages")).all()}
+        first_sync = not existing
+        new: list[dict] = []
+        for m in messages:
+            mid = m.get("id")
+            if mid is None or mid in existing:
+                continue
+            conn.execute(text("""
+                INSERT OR IGNORE INTO meesman_messages
+                    (id, title, created_at, read_state, type, important, first_seen)
+                VALUES (:id, :t, :c, :r, :ty, :imp, :fs)
+            """), {"id": mid, "t": m.get("title") or "", "c": m.get("created_at") or "",
+                    "r": m.get("read_state") or "", "ty": m.get("type") or "",
+                    "imp": 1 if m.get("important") else 0, "fs": now})
+            existing.add(mid)
+            new.append(m)
+    if first_sync:
+        logger.info("Meesman-inbox: %d bestaande berichten overgenomen (geen melding)", len(new))
+        return []
+    return sorted(new, key=lambda m: m.get("created_at") or "", reverse=True)
+
+
+def recent_meesman_messages(limit: int = 10) -> list[dict]:
+    with engine.begin() as conn:
+        rows = conn.execute(text(
+            "SELECT id, title, created_at, read_state, type, important, first_seen "
+            "FROM meesman_messages ORDER BY created_at DESC LIMIT :n"
+        ), {"n": int(limit)}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Rendement per kalenderjaar
 # ---------------------------------------------------------------------------
 def yearly_returns(exclude: set[str] | None = None) -> list[dict]:

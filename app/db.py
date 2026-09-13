@@ -127,3 +127,17 @@ def init_db(engine: Engine) -> None:
           missing_since TEXT
         );
         """))
+
+        # v9.9: Meesman-inbox (berichten die de overzichtspagina meelevert),
+        # om nieuwe berichten via Telegram te kunnen melden
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS meesman_messages (
+          id INTEGER PRIMARY KEY,
+          title TEXT NOT NULL,
+          created_at TEXT,
+          read_state TEXT,
+          type TEXT,
+          important INTEGER NOT NULL DEFAULT 0,
+          first_seen TEXT NOT NULL
+        );
+        """))

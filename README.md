@@ -18,7 +18,7 @@ A self-hosted Docker application that automatically logs into [mijn.meesman.nl](
 - **Deposit tracking** — add, edit and delete deposits; distinguish your own deposits from actual investment returns
 - **Home Assistant REST API** — `/api/sensors` and `/deposits.json`
 - **CSV export** — `/export.csv` and `/deposits.csv` (Dutch Excel format)
-- **Telegram notifications** on balance change (with optional € / % thresholds), session expiry, repeated refresh failures (with the debug screenshot attached, incl. recovery), browser failures, missing accounts, and monthly/weekly summaries
+- **Telegram notifications** on balance change (with optional € / % thresholds), session expiry, repeated refresh failures (with the debug screenshot attached, incl. recovery), browser failures, missing accounts, new messages in your Meesman inbox, and monthly/weekly summaries
 - **Import** of historical `export.json` and `deposits.json` files
 - **Manual data points** — add historical balances for any date
 - **Status page** with the last 30 refreshes (time, status, duration, message) and a **health endpoint** (`/health`) with `ok`/`degraded` status; `/api/sensors` carries the same freshness fields for Home Assistant
@@ -279,6 +279,7 @@ template:
 | `BACKUP_DIR` | `/data/backups` | Daily database copies |
 | `APP_VERSION` / `APP_COMMIT` | `dev` / empty | Set by CI as build args; shown in the footer and `/health` |
 | `SELF_RESTART` | `1` | When Chromium cannot start (host problem), exit the process so Docker restarts the container cleanly. Set to `0` to disable |
+| `API_CAPTURE` | `0` | Set to `1` to write every JSON response from `*.meesman.nl` during a refresh to `data/debug/api_capture.json` (debugging only) |
 
 ---
 
@@ -293,6 +294,7 @@ The app sends a message automatically on:
 - **Monthly summary** (on by default) — on the 1st of each month at 08:00: total value, deposits and return for the previous month per account, plus the year-to-date return after deposits
 - **Weekly summary** (optional) — Monday 08:00, same layout for the previous 7 days
 - **Missing account** — once, when a known (non-archived) account no longer appears in the Meesman overview
+- **Meesman inbox** (on by default) — when a new message appears in your inbox on mijn.meesman.nl (dividend payout, annual statement, …). The overview page loads the inbox itself; the tracker picks it up during the refresh. The first refresh silently records the existing inbox. The last 10 messages are listed on the status page.
 
 Thresholds: under *Config → Meldingen* you can require a minimum total change in € and/or % before a balance message is sent (a new account is always announced), and set after how many consecutive failed refreshes the warning goes out.
 
@@ -315,7 +317,7 @@ Example message:
 - **Tests & lint:** `pip install -r requirements-dev.txt && ruff check app tests scripts && pytest -q tests/` — parser/formatting unit tests, smoke tests that boot the app with a temporary data directory and exercise every route, and an offline regression test of the account-table parser against `tests/fixtures/meesman_overview.html` (needs `playwright install --only-shell chromium`; skipped otherwise). Replace the fixture with an anonymised copy of your own `data/debug/step3_home.html` for maximum realism. The same suite runs in GitHub Actions on every pull request (so Dependabot PRs show a green or red merge button) and before every image build.
 - **Selector canary:** `.github/workflows/selector-canary.yml` opens the Meesman login page daily and fails (→ GitHub notification e-mail) when the login selectors from `app/config_store.py` are gone. It never logs in.
 - **Upgrading Playwright:** a new Playwright means a new Chromium. The image runs Python 3.12. Bump the version in `requirements.txt` *and* in the canary workflow, then verify locally (`docker build .`, start the container, and launch Chromium once inside it) before pushing. Dependabot is configured to only propose patch updates for Playwright for this reason, to keep the Python base image on 3.11, and to bundle the remaining updates into one grouped PR per week.
-- **Meesman API research:** every refresh writes `data/debug/api_capture.json` — the URL, status and a 2 KB preview of each JSON response the browser received from `*.meesman.nl`. If the account overview turns out to be available as JSON, scraping can move from DOM parsing to a direct API call (far more robust; Chromium would only be needed for the login).
+- **Meesman API research (concluded):** the account overview is rendered server-side; there is no JSON API for balances, so DOM scraping stays. The only dynamic JSON calls are Umbraco `Messages/*` endpoints, which are now used for the inbox notifications and as an authenticated session ping. The capture can be re-enabled with `API_CAPTURE=1`.
 
 ---
 

@@ -141,6 +141,32 @@ def build_balance_change_message(
 
 
 # ---------------------------------------------------------------------------
+# Meesman-inbox
+# ---------------------------------------------------------------------------
+def _msg_date(created_at: str) -> str:
+    try:
+        return datetime.fromisoformat((created_at or "")[:19]).strftime("%d-%m-%Y")
+    except Exception:
+        return ""
+
+
+def build_messages_notification(messages: list[dict]) -> str | None:
+    """'📬 Nieuw bericht van Meesman' met titel(s) en datum."""
+    if not messages:
+        return None
+    head = ("📬 Nieuw bericht van Meesman:" if len(messages) == 1
+            else f"📬 {len(messages)} nieuwe berichten van Meesman:")
+    lines = [head, ""]
+    for m in messages:
+        date = _msg_date(m.get("created_at", ""))
+        lines.append(f"• {m.get('title') or '(zonder titel)'}"
+                     + (f" ({date})" if date else "")
+                     + (" ❗" if m.get("important") else ""))
+    lines += ["", "Lees het op https://mijn.meesman.nl"]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Periode-overzichten (week / maand)
 # ---------------------------------------------------------------------------
 def build_period_summary(start: datetime, end: datetime, title: str,

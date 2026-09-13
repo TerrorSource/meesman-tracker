@@ -63,6 +63,7 @@ def config_page(request: Request):
         "fail_alert_threshold": cfg.get("fail_alert_threshold") or 3,
         "monthly_summary":      bool(cfg.get("monthly_summary", True)),
         "weekly_summary":       bool(cfg.get("weekly_summary", False)),
+        "notify_messages":      bool(cfg.get("notify_messages", True)),
 
         # Backups
         "backup_keep":      cfg.get("backup_keep") or 14,
@@ -138,6 +139,7 @@ async def config_save(request: Request):
     cfg["fail_alert_threshold"] = max(1, int(_num(str(g("fail_alert_threshold", "3")), 3)))
     cfg["monthly_summary"]      = g("monthly_summary") == "1"
     cfg["weekly_summary"]       = g("weekly_summary") == "1"
+    cfg["notify_messages"]      = g("notify_messages") == "1"
 
     # ── Backups ──
     cfg["backup_keep"] = max(1, int(_num(str(g("backup_keep", "14")), 14)))

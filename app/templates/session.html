@@ -55,6 +55,28 @@
   {% endif %}
 </div>
 
+<!-- ── Meesman-inbox ── -->
+<div class="card">
+  <h3 style="margin:0 0 10px">Meesman-berichten <small>(laatste 10, uit je inbox op mijn.meesman.nl)</small></h3>
+  {% if not messages %}
+    <p style="margin:0; color:var(--muted)"><em>Nog geen berichten gezien — die komen mee met de eerstvolgende refresh.</em></p>
+  {% else %}
+    <table>
+      <thead><tr><th>Datum</th><th>Titel</th><th>Type</th><th>Gezien door tracker</th></tr></thead>
+      <tbody>
+        {% for m in messages %}
+        <tr>
+          <td style="white-space:nowrap">{{ (m.created_at[:19] ~ '+00:00') | local_date }}</td>
+          <td>{% if m.important %}❗ {% endif %}{{ m.title }}</td>
+          <td class="muted">{{ m.type }}</td>
+          <td style="white-space:nowrap">{{ m.first_seen | local }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
 <!-- ── Sessiebestand ── -->
 <div class="card">
   <h3 style="margin:0 0 10px">Playwright-sessiebestand</h3>

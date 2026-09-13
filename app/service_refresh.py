@@ -36,6 +36,7 @@ from .store import (
     consecutive_failed_refreshes,
     get_prev_values,
     latest_debug_screenshot,
+    sync_meesman_messages,
     update_missing_accounts,
     write_export_json,
     write_keepalive_log,
@@ -43,6 +44,7 @@ from .store import (
 )
 from .telegram import (
     build_balance_change_message,
+    build_messages_notification,
     build_monthly_summary,
     build_weekly_summary,
     send_telegram,
@@ -227,10 +229,12 @@ async def _do_refresh() -> tuple[bool, str]:
             **{k: sels[k] for k in sels},
         }
 
+        inbox: list[dict] = []
         accounts = await fetch_accounts(
             scrape_cfg,
             storage_state_path=str(SESSION_STATE_PATH),
             dump_cookies_path=str(COOKIES_DUMP_PATH),
+            collect_messages=inbox,
         )
         duration = round(time.monotonic() - t0, 1)
 
@@ -272,6 +276,11 @@ async def _do_refresh() -> tuple[bool, str]:
         if reappeared:
             logger.info("Rekening(en) weer aanwezig in de scrape: %s", ", ".join(reappeared))
 
+        # Meesman-inbox: nieuwe berichten (eerste sync = stil overnemen)
+        new_messages = sync_meesman_messages(inbox)
+        if new_messages:
+            logger.info("Meesman-inbox: %d nieuw(e) bericht(en)", len(new_messages))
+
         # ------------------------------------------------------------------
         # Telegram notifications
         # ------------------------------------------------------------------
@@ -292,6 +301,11 @@ async def _do_refresh() -> tuple[bool, str]:
                     "Is de rekening opgeheven? Archiveer hem dan op het dashboard, zodat hij "
                     "niet meer meetelt in totalen en meldingen.",
                 )
+
+            if new_messages and cfg.get("notify_messages", True):
+                note = build_messages_notification(new_messages)
+                if note:
+                    await asyncio.to_thread(send_telegram, cfg, note)
 
             msg = build_balance_change_message(
                 accounts, prev_values,

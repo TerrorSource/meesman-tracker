@@ -23,8 +23,15 @@ logger = logging.getLogger("meesman")
 # sessie een 200 met alleen een JS-redirect-stubje naar de OAuth-flow.
 _STUB_MARKER = "signInWithMeesmanAuthentication"
 
-# Max. aantal API-responses dat per refresh wordt vastgelegd (api_capture.json)
+# API-capture (debug/api_capture.json) staat standaard uit: het onderzoek is
+# afgerond (geen JSON-API voor saldi; alleen CLDR-data + Umbraco-berichten).
+# Aanzetten met API_CAPTURE=1.
+API_CAPTURE_ENABLED = os.environ.get("API_CAPTURE", "0") == "1"
 _API_CAPTURE_LIMIT = 50
+
+# Umbraco-endpoints van mijn.meesman.nl (ontdekt via de API-capture)
+_MESSAGES_LIST_PATH  = "/umbraco/Surface/Messages/List"
+_MESSAGES_COUNT_URL  = "https://mijn.meesman.nl/umbraco/Surface/Messages/GetUnreadMessageCount"
 
 
 def is_browser_launch_failure(exc: BaseException) -> bool:
@@ -37,6 +44,40 @@ def is_browser_launch_failure(exc: BaseException) -> bool:
 def _is_redirect_stub(body: str) -> bool:
     """Herkent het ~200-bytes JS-stubje dat mijn.meesman.nl zonder sessie teruggeeft."""
     return len(body) < 2000 and _STUB_MARKER in body
+
+
+def parse_messages_payload(body: str) -> list[dict]:
+    """
+    Parse de response van umbraco/Surface/Messages/List (de Meesman-inbox).
+    Vorm: {"success": true, "data": {"rows": "[{...}, ...]"}} — 'rows' is een
+    JSON-string ín de JSON (dubbel gecodeerd), soms al een lijst.
+    Returnt [{id, title, created_at, read_state, type, important}, ...].
+    """
+    try:
+        payload = json.loads(body)
+    except Exception:
+        return []
+    rows = (payload.get("data") or {}).get("rows") if isinstance(payload, dict) else None
+    if isinstance(rows, str):
+        try:
+            rows = json.loads(rows)
+        except Exception:
+            return []
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for r in rows:
+        if not isinstance(r, dict) or r.get("id") is None:
+            continue
+        out.append({
+            "id":         int(r["id"]),
+            "title":      str(r.get("title") or "").strip(),
+            "created_at": str(r.get("createdOnAt") or ""),
+            "read_state": str(r.get("readState") or ""),
+            "type":       str(r.get("type") or ""),
+            "important":  bool(r.get("isImportant")),
+        })
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +262,7 @@ async def fetch_accounts(
     storage_state_path: str | None = None,
     save_storage_state: bool = True,
     dump_cookies_path: str | None = None,
+    collect_messages: list | None = None,
 ) -> List[AccountRow]:
     """
     Log in to Meesman (with optional TOTP or manual MFA), scrape account balances.
@@ -231,6 +273,9 @@ async def fetch_accounts(
       login_user_selector, login_pass_selector, login_submit_selector,
       mfa_input_selector, mfa_submit_selector,
       accounts_row_selector, acc_number_selector, acc_label_selector, acc_value_selector
+
+    collect_messages: optionele lijst waarin de Meesman-inbox (Messages/List,
+    door de overzichtspagina zelf aangeroepen) wordt verzameld.
     """
     login_url = "https://login.meesman.nl/"
     home_url  = "https://mijn.meesman.nl/"
@@ -259,6 +304,15 @@ async def fetch_accounts(
     async def _capture_response(resp) -> None:
         try:
             url = resp.url
+            # Meesman-inbox: de overzichtspagina laadt die zelf via XHR
+            if _MESSAGES_LIST_PATH in url and collect_messages is not None:
+                try:
+                    collect_messages.extend(parse_messages_payload(await resp.text()))
+                except Exception:
+                    pass
+                return
+            if not API_CAPTURE_ENABLED:
+                return
             if "meesman.nl" not in url or len(captured) >= _API_CAPTURE_LIMIT:
                 return
             ctype = (resp.headers.get("content-type") or "").lower()
@@ -276,6 +330,8 @@ async def fetch_accounts(
             pass
 
     def _write_capture() -> None:
+        if not API_CAPTURE_ENABLED:
+            return
         try:
             (debug_dir / "api_capture.json").write_text(
                 json.dumps({"generated_at": _now_iso(), "responses": captured},
@@ -526,6 +582,25 @@ def http_session_check(storage_state_path: str) -> Optional[bool]:
             except Exception:
                 pass
 
+        # 1) Geauthenticeerd JSON-endpoint (Umbraco): antwoordt alleen met
+        #    {"Total": n} als de sessie geldig is — preciezer dan de startpagina.
+        try:
+            r = s.get(
+                _MESSAGES_COUNT_URL, timeout=30, allow_redirects=True,
+                headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"},
+            )
+            ctype = (r.headers.get("content-type") or "").lower()
+            if r.status_code == 200 and "json" in ctype:
+                data = r.json()
+                if isinstance(data, dict) and "Total" in data:
+                    return True
+            if "login" in (r.url or "").lower() or r.status_code in (401, 403) \
+                    or _is_redirect_stub(r.text or ""):
+                return False
+        except Exception:
+            pass  # onduidelijk → terugvallen op de startpagina-check
+
+        # 2) Terugval: de startpagina zelf
         r = s.get("https://mijn.meesman.nl/", timeout=30, allow_redirects=True)
         final_url = (r.url or "").lower()
 

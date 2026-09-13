@@ -98,3 +98,29 @@ def test_balance_message_thresholds_and_exclude():
     # gearchiveerde rekening blijft buiten het bericht en het totaal
     msg = build_balance_change_message(accs, prev, exclude={"25110311"})
     assert "Pensioen" not in msg and "€ 32.655,62" in msg
+
+
+def test_parse_messages_payload_double_encoded():
+    from app.scraper import parse_messages_payload
+    body = ('{"success":true,"data":{"rows":"[{\\"id\\":747222,\\"title\\":\\"Dividenduitkering\\",'
+            '\\"personId\\":41051,\\"createdOnAt\\":\\"2026-07-03T10:41:30.9569455\\",\\"readState\\":\\"Read\\",'
+            '\\"type\\":\\"General\\",\\"status\\":\\"Inbox\\",\\"isImportant\\":false},'
+            '{\\"id\\":563005,\\"title\\":\\"Jaaroverzicht 2025\\",\\"createdOnAt\\":\\"2026-01-30T14:14:14.5\\",'
+            '\\"isImportant\\":true}]"}}')
+    msgs = parse_messages_payload(body)
+    assert [m["id"] for m in msgs] == [747222, 563005]
+    assert msgs[0]["title"] == "Dividenduitkering" and msgs[0]["created_at"].startswith("2026-07-03")
+    assert msgs[1]["important"] is True
+    # rows al als lijst, en rommel
+    assert parse_messages_payload('{"data":{"rows":[{"id":1,"title":"x"}]}}')[0]["id"] == 1
+    assert parse_messages_payload("geen json") == [] and parse_messages_payload('{"data":{}}') == []
+
+
+def test_messages_notification_text():
+    from app.telegram import build_messages_notification
+    assert build_messages_notification([]) is None
+    one = build_messages_notification([{"id": 1, "title": "Dividenduitkering", "created_at": "2026-07-03T10:41:30.95", "important": False}])
+    assert one.startswith("📬 Nieuw bericht van Meesman:") and "• Dividenduitkering (03-07-2026)" in one
+    two = build_messages_notification([{"id": 1, "title": "A", "created_at": "", "important": True},
+                                       {"id": 2, "title": "B", "created_at": "2026-01-30T14:14:14", "important": False}])
+    assert "2 nieuwe berichten" in two and "• A ❗" in two and "• B (30-01-2026)" in two
