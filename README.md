@@ -286,9 +286,9 @@ Example message:
 
 ## Development, tests and CI
 
-- **Tests:** `pip install -r requirements-dev.txt && pytest -q tests/` — parser/formatting unit tests plus smoke tests that boot the app with a temporary data directory and exercise every route. The same suite runs in GitHub Actions before every image build.
+- **Tests:** `pip install -r requirements-dev.txt && pytest -q tests/` — parser/formatting unit tests plus smoke tests that boot the app with a temporary data directory and exercise every route. The same suite runs in GitHub Actions on every pull request (so Dependabot PRs show a green or red merge button) and before every image build.
 - **Selector canary:** `.github/workflows/selector-canary.yml` opens the Meesman login page daily and fails (→ GitHub notification e-mail) when the login selectors from `app/config_store.py` are gone. It never logs in.
-- **Upgrading Playwright:** a new Playwright means a new Chromium. Bump the version in `requirements.txt` *and* in the canary workflow, then verify locally (`docker build .`, start the container, and launch Chromium once inside it) before pushing. Dependabot is configured to only propose patch updates for Playwright for this reason.
+- **Upgrading Playwright:** a new Playwright means a new Chromium. Bump the version in `requirements.txt` *and* in the canary workflow, then verify locally (`docker build .`, start the container, and launch Chromium once inside it) before pushing. Dependabot is configured to only propose patch updates for Playwright for this reason, to keep the Python base image on 3.11, and to bundle the remaining updates into one grouped PR per week.
 - **Meesman API research:** every refresh writes `data/debug/api_capture.json` — the URL, status and a 2 KB preview of each JSON response the browser received from `*.meesman.nl`. If the account overview turns out to be available as JSON, scraping can move from DOM parsing to a direct API call (far more robust; Chromium would only be needed for the login).
 
 ---

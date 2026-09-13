@@ -16,7 +16,7 @@ router = APIRouter()
 
 @router.get("/import", response_class=HTMLResponse)
 def import_page(request: Request):
-    return templates.TemplateResponse("import.html", {"request": request})
+    return templates.TemplateResponse(request, "import.html", {})
 
 
 @router.post("/import")
@@ -89,8 +89,7 @@ async def import_post(request: Request, files: list[UploadFile] = File(...)):
     total_inserted = sum(r["inserted"] for r in results)
     total_skipped  = sum(r["skipped"]  for r in results)
 
-    return templates.TemplateResponse("import.html", {
-        "request":        request,
+    return templates.TemplateResponse(request, "import.html", {
         "results":        results,
         "total_inserted": total_inserted,
         "total_skipped":  total_skipped,
@@ -109,8 +108,7 @@ async def import_manual(
     """Manually add a single historical data point."""
     acc_number = account_number.strip()
     if not acc_number:
-        return templates.TemplateResponse("import.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "import.html", {
             "manual_error": "Rekeningnummer is verplicht.",
             "manual_inserted": 0,
         })
@@ -120,8 +118,7 @@ async def import_manual(
         dt  = datetime.fromisoformat(f"{entry_date}T{entry_time}:00").replace(tzinfo=timezone.utc)
         ts  = dt.isoformat()
     except ValueError:
-        return templates.TemplateResponse("import.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "import.html", {
             "manual_error": "Ongeldige datum of tijd.",
             "manual_inserted": 0,
         })
@@ -130,8 +127,7 @@ async def import_manual(
     try:
         value_eur_float = parse_form_amount(value_eur)
     except (ValueError, AttributeError):
-        return templates.TemplateResponse("import.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "import.html", {
             "manual_error": f"Ongeldig bedrag: '{value_eur}'. Gebruik komma als decimaalteken, bijv. 4987,50 of 29869,81",
             "manual_inserted": 0,
         })
@@ -152,8 +148,7 @@ async def import_manual(
         """), {"ts": ts, "n": acc_number}).first()
 
         if exists:
-            return templates.TemplateResponse("import.html", {
-                "request": request,
+            return templates.TemplateResponse(request, "import.html", {
                 "manual_error": f"Er bestaat al een datapunt voor {acc_number} op {ts}.",
                 "manual_inserted": 0,
             })
@@ -170,8 +165,7 @@ async def import_manual(
 
     logger.info("Handmatig datapunt toegevoegd: %s %s € %.2f", acc_number, ts, value_eur_float)
 
-    return templates.TemplateResponse("import.html", {
-        "request":         request,
+    return templates.TemplateResponse(request, "import.html", {
         "manual_inserted": 1,
         "manual_ts":       ts,
         "manual_account":  acc_number,
@@ -240,8 +234,7 @@ async def import_deposits(request: Request, files: list[UploadFile] = File(...))
     total_inserted = sum(r["inserted"] for r in results)
     total_skipped  = sum(r["skipped"]  for r in results)
 
-    return templates.TemplateResponse("import.html", {
-        "request":                  request,
+    return templates.TemplateResponse(request, "import.html", {
         "dep_results":              results,
         "dep_total_inserted":       total_inserted,
         "dep_total_skipped":        total_skipped,

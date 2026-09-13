@@ -1,4 +1,4 @@
 # Alleen nodig voor de tests (CI en lokaal), niet in het runtime-image
 -r requirements.txt
-pytest==8.3.3
-httpx==0.27.2
+pytest==9.1.1
+httpx==0.28.1

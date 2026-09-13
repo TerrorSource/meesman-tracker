@@ -104,8 +104,7 @@ def dashboard(request: Request):
 
     payload = {"accounts": accounts_payload}
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request":      request,
+    return templates.TemplateResponse(request, "dashboard.html", {
         # '</' escapen zodat een label nooit uit het <script>-blok kan breken
         "payload_json": json.dumps(payload).replace("</", "<\\/"),
         "last_refresh": dict(last) if last else None,
@@ -194,8 +193,7 @@ def session_page(request: Request):
             except Exception:
                 pass
 
-        return templates.TemplateResponse("session.html", {
-            "request":           request,
+        return templates.TemplateResponse(request, "session.html", {
             "now_utc":           now_iso(),
             "keepalive_minutes": keepalive_minutes,
             "session_path":      str(SESSION_STATE_PATH),

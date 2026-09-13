@@ -1,17 +1,18 @@
-# Automatische update-PR's voor dependencies.
-# Vooral Playwright/Chromium actueel houden is belangrijk voor
-# scraping-betrouwbaarheid en security-patches.
+# Automatische update-PR's voor dependencies — gegroepeerd tot één PR per
+# categorie per week. De tests draaien op elke PR (zie docker.yml), dus de
+# merge-knop is groen of rood vóór je klikt.
 version: 2
 updates:
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    groups:
+      python-dependencies:
+        patterns: ["*"]
     ignore:
-      # Playwright-upgrades brengen een nieuwe Chromium mee en moeten
-      # bewust + met lokale buildtest gedaan worden (zie README).
-      # Alleen patch-updates komen automatisch als PR binnen.
+      # Playwright-upgrades brengen een nieuwe Chromium mee: bewust doen,
+      # met lokale buildtest (zie README). Alleen patch-updates automatisch.
       - dependency-name: "playwright"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
@@ -19,8 +20,16 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # Python-basisimage bewust vastzetten op 3.11: nieuwere versies missen
+      # wheels voor gepinde packages en breken de build.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]

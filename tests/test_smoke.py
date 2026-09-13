@@ -121,3 +121,10 @@ def test_dashboard_has_controls_and_local_time(client):
     html = client.get("/").text
     assert 'id="baseline-date"' in html and 'id="period-buttons"' in html
     assert "vtest" in html
+
+
+def test_fernet_roundtrip_after_key_generation(client):
+    from app.security import decrypt_str, encrypt_str
+    token = encrypt_str("geheim-123 €")
+    assert token != "geheim-123 €"
+    assert decrypt_str(token) == "geheim-123 €"

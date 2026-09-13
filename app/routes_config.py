@@ -44,7 +44,7 @@ def config_page(request: Request):
         "telegram_bot_token": decrypt_if_present(cfg.get("telegram_bot_token_enc")).strip(),
         "telegram_chat_id":   decrypt_if_present(cfg.get("telegram_chat_id_enc")).strip(),
     }
-    return templates.TemplateResponse("config.html", {"request": request, "cfg": view})
+    return templates.TemplateResponse(request, "config.html", {"cfg": view})
 
 
 @router.post("/config/generate-key")

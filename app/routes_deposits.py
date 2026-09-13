@@ -14,8 +14,8 @@ router = APIRouter()
 
 
 def _error_page(request: Request, message: str):
-    return templates.TemplateResponse("deposits.html", {
-        "request": request, "error": message, "deposits": load_deposits(),
+    return templates.TemplateResponse(request, "deposits.html", {
+        "error": message, "deposits": load_deposits(),
     })
 
 
@@ -50,8 +50,7 @@ def _lookup_label(conn, acc_number: str) -> str:
 
 @router.get("/deposits", response_class=HTMLResponse)
 def deposits_page(request: Request):
-    return templates.TemplateResponse("deposits.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "deposits.html", {
         "deposits": load_deposits(),
     })
 
