@@ -21,7 +21,7 @@ updates:
     schedule:
       interval: "weekly"
     ignore:
-      # Python-basisimage bewust vastzetten op 3.11: nieuwere versies missen
+      # Python-basisimage bewust vastzetten op 3.12: nieuwere versies missen
       # wheels voor gepinde packages en breken de build.
       - dependency-name: "python"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]

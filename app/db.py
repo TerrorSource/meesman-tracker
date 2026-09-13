@@ -28,6 +28,13 @@ def get_engine() -> Engine:
     return engine
 
 
+def _add_column_if_missing(conn, table: str, column: str, ddl: str) -> None:
+    cols = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).all()}
+    if column not in cols:
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        logger.info("Migratie: kolom %s.%s toegevoegd", table, column)
+
+
 def init_db(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(text("""
@@ -64,7 +71,6 @@ def init_db(engine: Engine) -> None:
         logger.warning("Unieke index op accounts_snapshot kon niet worden aangemaakt: %s", e)
 
     with engine.begin() as conn:
-
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS refresh_log (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +80,8 @@ def init_db(engine: Engine) -> None:
           message TEXT
         );
         """))
+        # v9.7: duur van de refresh in seconden (voor de statuspagina)
+        _add_column_if_missing(conn, "refresh_log", "duration_s", "REAL")
 
         conn.execute(text("""
         CREATE INDEX IF NOT EXISTS idx_refresh_log_ts
@@ -108,4 +116,14 @@ def init_db(engine: Engine) -> None:
         conn.execute(text("""
         CREATE INDEX IF NOT EXISTS idx_deposits_acc_ts
         ON deposits(account_number, ts);
+        """))
+
+        # v9.7: per-rekening instellingen (archiveren) + detectie van
+        # rekeningen die uit de Meesman-scrape verdwenen zijn
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS account_settings (
+          account_number TEXT PRIMARY KEY,
+          archived INTEGER NOT NULL DEFAULT 0,
+          missing_since TEXT
+        );
         """))

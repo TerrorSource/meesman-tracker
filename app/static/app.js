@@ -2,6 +2,14 @@
   const payload = window.__PAYLOAD__;
   const root    = document.getElementById("charts");
 
+  // Kleuren uit de CSS-variabelen (licht/donker thema)
+  const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const C = {
+    ok: cssVar("--ok"), err: cssVar("--err"), muted: cssVar("--muted"), muted2: cssVar("--muted2"),
+    faint: cssVar("--faint"), accent: cssVar("--accent"), accentDark: cssVar("--accent-dark"),
+    fill: cssVar("--accent-fill"), grid: cssVar("--grid"), text: cssVar("--text"),
+  };
+
   if (!payload.accounts.length) {
     root.innerHTML = `<div class="card">Nog geen data. Ga naar Config, sla credentials op en klik op "↻ Refresh nu".</div>`;
     return;
@@ -21,9 +29,9 @@
     if (!periodBtns) return;
     periodBtns.querySelectorAll("button").forEach((b) => {
       const active = parseInt(b.dataset.days, 10) === periodDays;
-      b.style.background = active ? "#0066cc" : "";
-      b.style.color      = active ? "#fff" : "";
-      b.style.borderColor = active ? "#0052a3" : "";
+      b.style.background  = active ? C.accent : "";
+      b.style.color       = active ? "#fff" : "";
+      b.style.borderColor = active ? C.accentDark : "";
     });
   }
   if (periodBtns) {
@@ -92,13 +100,14 @@
 
     const baselineDate  = baselineInp ? baselineInp.value : "";
     const baselineLabel = baselineDate ? `sinds ${fmtDate(baselineDate)}` : "groei";
+    const active = payload.accounts.filter((a) => !a.archived);
 
-    // ── Totaalbanner ────────────────────────────────────────────────────────
+    // ── Totaalbanner (gearchiveerde rekeningen tellen niet mee) ─────────────
     if (totalCard && totalVal) {
       let total = 0, baseTotal = 0;
       let totalDeposits = 0, trueRendement = 0;
 
-      payload.accounts.forEach((a) => {
+      active.forEach((a) => {
         const base = baselineFor(a, baselineDate);
         total     += a.current ?? 0;
         baseTotal += base ? base.value : (a.current ?? 0);
@@ -113,13 +122,13 @@
       let html = `<strong>Totaal vermogen:</strong> <span style="font-size:1.4em; font-weight:700; margin-left:8px">${fmtEur(total)}</span>`;
 
       if (totalDelta !== 0 && baseTotal) {
-        const color = totalDelta >= 0 ? "#0a7a0a" : "#b00020";
+        const color = totalDelta >= 0 ? C.ok : C.err;
         html += `<span style="margin-left:12px; color:${color}; font-size:0.9em">${fmtEurDelta(totalDelta)} (${fmtPct(totalPct)}) ${esc(baselineLabel)}</span>`;
       }
 
       if (totalDeposits > 0) {
-        const color = trueRendement >= 0 ? "#0a7a0a" : "#b00020";
-        html += `<br><small style="color:#666">Totale inleg: ${fmtEur(totalDeposits)} &nbsp;—&nbsp; `;
+        const color = trueRendement >= 0 ? C.ok : C.err;
+        html += `<br><small style="color:${C.muted}">Totale inleg: ${fmtEur(totalDeposits)} &nbsp;—&nbsp; `;
         html += `Echt rendement: <strong style="color:${color}">${fmtEurDelta(trueRendement)}`;
         if (truePct !== null) html += ` (${fmtPct(truePct)})`;
         html += `</strong></small>`;
@@ -133,6 +142,7 @@
     payload.accounts.forEach((acc) => {
       const card = document.createElement("div");
       card.className = "card";
+      if (acc.archived) card.style.opacity = "0.6";
 
       const current = acc.current ?? null;
       const changes = acc.changes ?? [];
@@ -151,26 +161,37 @@
 
       let groeiBadge = "";
       if (growthDelta !== null && growthPct !== null) {
-        const color = growthDelta >= 0 ? "#0a7a0a" : "#b00020";
+        const color = growthDelta >= 0 ? C.ok : C.err;
         const arrow = growthDelta >= 0 ? "📈" : "📉";
         groeiBadge = `<span style="font-size:0.8em; color:${color}; font-weight:600; margin-left:8px">${arrow} ${fmtEurDelta(growthDelta)} (${fmtPct(growthPct)}) ${esc(baselineLabel)}</span>`;
       }
 
       let rendBadge = "";
       if (trueRendement !== null && totalDeposits !== null) {
-        const color = trueRendement >= 0 ? "#0a7a0a" : "#b00020";
-        rendBadge = `<div style="font-size:0.8em; color:#555; margin-top:2px">
+        const color = trueRendement >= 0 ? C.ok : C.err;
+        rendBadge = `<div style="font-size:0.8em; color:${C.muted}; margin-top:2px">
           Inleg: ${fmtEur(totalDeposits)} &nbsp;|&nbsp;
           Echt rendement: <strong style="color:${color}">${fmtEurDelta(trueRendement)}${trueRendPct !== null ? ` (${fmtPct(trueRendPct)})` : ""}</strong>
         </div>`;
       }
 
+      const archiveCtl = acc.archived
+        ? `<span style="font-size:0.75em; color:${C.muted2}; margin-left:8px">📦 gearchiveerd</span>
+           <form method="post" action="/accounts/${esc(acc.account_number)}/unarchive" style="display:inline; margin-left:6px">
+             <button type="submit" style="font-size:11px; padding:2px 8px">Herstellen</button>
+           </form>`
+        : `<form method="post" action="/accounts/${esc(acc.account_number)}/archive" style="display:inline; margin-left:8px"
+                 onsubmit="return confirm('Rekening ${esc(acc.label)} archiveren?\\n\\nDe data blijft bewaard, maar de rekening verdwijnt van het dashboard en telt niet meer mee in totalen, API en meldingen.')">
+             <button type="submit" title="Archiveren (bijv. na opheffen)" style="font-size:11px; padding:2px 8px; color:${C.muted2}">📦</button>
+           </form>`;
+
       header.innerHTML = `
         <div>
           <div>
             <strong style="font-size:1.05em">${esc(acc.label)}</strong>
-            <small style="color:#888; margin-left:6px">${esc(acc.account_number)}</small>
+            <small style="color:${C.muted2}; margin-left:6px">${esc(acc.account_number)}</small>
             ${groeiBadge}
+            ${archiveCtl}
           </div>
           ${rendBadge}
         </div>
@@ -191,12 +212,12 @@
         const rows = [...changes].reverse().map((c) => {
           const delta    = c.delta     ?? null;
           const deltaPct = c.delta_pct ?? null;
-          const color    = delta === null ? "" : delta >= 0 ? "color:#0a7a0a" : "color:#b00020";
+          const color    = delta === null ? "" : delta >= 0 ? `color:${C.ok}` : `color:${C.err}`;
           return `<tr>
-            <td style="color:#555; padding-right:12px">${esc(fmtTs(c.ts))}</td>
+            <td style="color:${C.muted}; padding-right:12px">${esc(fmtTs(c.ts))}</td>
             <td style="font-weight:600; text-align:right">${fmtEur(c.value)}</td>
             <td style="text-align:right; padding-left:10px; ${color}">
-              ${delta !== null ? fmtEurDelta(delta) : '<span style="color:#ccc">—</span>'}
+              ${delta !== null ? fmtEurDelta(delta) : `<span style="color:${C.faint}">—</span>`}
             </td>
             <td style="text-align:right; padding-left:6px; ${color}">
               ${deltaPct !== null ? `(${fmtPct(deltaPct)})` : ""}
@@ -206,24 +227,24 @@
                       data-acc="${esc(acc.account_number)}" data-ts="${esc(c.ts)}"
                       data-info="${esc(fmtTs(c.ts))} — ${esc(fmtEur(c.value))}"
                       style="background:none; border:none; cursor:pointer;
-                             color:#b00020; padding:2px 4px; font-size:13px">✕</button>
+                             color:${C.err}; padding:2px 4px; font-size:13px">✕</button>
             </td>
           </tr>`;
         }).join("");
 
         tbl.innerHTML = `
-          <strong style="display:block; margin-bottom:6px; color:#444">Wijzigingen</strong>
+          <strong style="display:block; margin-bottom:6px; color:${C.text}">Wijzigingen</strong>
           <table style="width:100%">
             <thead><tr>
-              <th style="text-align:left; color:#888; font-weight:normal">Tijdstip</th>
-              <th style="text-align:right; color:#888; font-weight:normal">Saldo</th>
-              <th style="text-align:right; color:#888; font-weight:normal" colspan="2">Δ t.o.v. vorig</th>
+              <th style="text-align:left; color:${C.muted2}; font-weight:normal">Tijdstip</th>
+              <th style="text-align:right; color:${C.muted2}; font-weight:normal">Saldo</th>
+              <th style="text-align:right; color:${C.muted2}; font-weight:normal" colspan="2">Δ t.o.v. vorig</th>
               <th></th>
             </tr></thead>
             <tbody>${rows}</tbody>
           </table>
           ${acc.first_ts && acc.first_value !== null
-            ? `<p style="margin:8px 0 0; color:#888; font-size:11px">Eerste meting: ${esc(fmtTs(acc.first_ts))} — ${fmtEur(acc.first_value)}</p>`
+            ? `<p style="margin:8px 0 0; color:${C.muted2}; font-size:11px">Eerste meting: ${esc(fmtTs(acc.first_ts))} — ${fmtEur(acc.first_value)}</p>`
             : ""}
         `;
         card.appendChild(tbl);
@@ -260,8 +281,8 @@
             parsing:         { xAxisKey: "x", yAxisKey: "y" },
             tension:         0.3,
             pointRadius:     3,
-            borderColor:     "#0066cc",
-            backgroundColor: "rgba(0,102,204,0.08)",
+            borderColor:     C.accent,
+            backgroundColor: C.fill,
             fill:            true,
           }],
         },
@@ -276,12 +297,12 @@
             x: {
               type: "time",
               time: { tooltipFormat: "dd-MM-yyyy HH:mm" },
-              ticks: { maxTicksLimit: 6, color: "#888" },
-              grid:  { color: "#f0f0f0" },
+              ticks: { maxTicksLimit: 6, color: C.muted2 },
+              grid:  { color: C.grid },
             },
             y: {
-              ticks: { callback: (v) => fmtEur(v), maxTicksLimit: 5, color: "#888" },
-              grid:  { color: "#f0f0f0" },
+              ticks: { callback: (v) => fmtEur(v), maxTicksLimit: 5, color: C.muted2 },
+              grid:  { color: C.grid },
             },
           },
         },

@@ -1,4 +1,4 @@
-"""Routes: dashboard, healthcheck, handmatige refresh en sessie-pagina."""
+"""Routes: dashboard, healthcheck, handmatige refresh, rekeningen archiveren en statuspagina."""
 from __future__ import annotations
 
 import json
@@ -20,21 +20,24 @@ from .core import (
 )
 from .service_refresh import refresh_once
 from .store import (
+    archived_accounts,
+    compute_health,
     get_deposits,
-    last_ok_refresh_dt,
-    last_refresh_info,
     read_cookie_dump_summary,
+    recent_refresh_log,
+    set_archived,
     write_export_json,
+    yearly_returns,
 )
-
-# Ouder dan dit (uren) zonder geslaagde refresh → /health meldt 'degraded'
-HEALTH_STALE_HOURS = 48
 
 router = APIRouter()
 
 
 @router.get("/", response_class=HTMLResponse)
-def dashboard(request: Request):
+def dashboard(request: Request, archived: int = 0):
+    show_archived = bool(archived)
+    archived_set  = archived_accounts()
+
     with engine.begin() as conn:
         last = conn.execute(text("""
             SELECT ts, status, stored_rows, message
@@ -54,6 +57,8 @@ def dashboard(request: Request):
 
     for r in rows:
         acc = r["account_number"]
+        if acc in archived_set and not show_archived:
+            continue
         labels[acc] = r["label"]
         val = to_float(r["value_eur"])  # SQLite kan tekst of komma-notatie teruggeven (legacy rijen)
 
@@ -86,6 +91,7 @@ def dashboard(request: Request):
         accounts_payload.append({
             "account_number":  acc,
             "label":           labels.get(acc, ""),
+            "archived":        acc in archived_set,
             "points":          series[acc],
             "changes":         changes.get(acc, []),
             "current":         current,
@@ -106,9 +112,12 @@ def dashboard(request: Request):
 
     return templates.TemplateResponse(request, "dashboard.html", {
         # '</' escapen zodat een label nooit uit het <script>-blok kan breken
-        "payload_json": json.dumps(payload).replace("</", "<\\/"),
-        "last_refresh": dict(last) if last else None,
-        "export_path":  "/export.json",
+        "payload_json":   json.dumps(payload).replace("</", "<\\/"),
+        "last_refresh":   dict(last) if last else None,
+        "export_path":    "/export.json",
+        "yearly":         yearly_returns(exclude=archived_set),
+        "show_archived":  show_archived,
+        "archived_count": len(archived_set),
     })
 
 
@@ -120,24 +129,12 @@ def health():
     'degraded' als de laatste refresh faalde of de laatste geslaagde
     refresh te oud is — zo zie je in één blik of de data nog stroomt.
     """
-    last_ok = last_ok_refresh_dt()
-    info    = last_refresh_info()
-    age_h   = ((datetime.now(timezone.utc) - last_ok).total_seconds() / 3600) if last_ok else None
-
-    degraded = (
-        last_ok is None
-        or age_h > HEALTH_STALE_HOURS
-        or (info is not None and info.get("status") == "failed")
-    )
-
+    h = compute_health()
     return JSONResponse({
-        "status":               "degraded" if degraded else "ok",
-        "version":              APP_VERSION_FULL,
-        "time":                 now_iso(),
-        "last_ok_refresh":      last_ok.isoformat() if last_ok else None,
-        "last_ok_age_hours":    round(age_h, 1) if age_h is not None else None,
-        "last_refresh_status":  info.get("status") if info else None,
-        "last_refresh_message": (info.get("message") or None) if info else None,
+        "status":  h["status"],
+        "version": APP_VERSION_FULL,
+        "time":    now_iso(),
+        **{k: v for k, v in h.items() if k != "status"},
     })
 
 
@@ -161,6 +158,20 @@ async def datapoint_delete(account_number: str = Form(...), ts: str = Form(...))
         logger.warning("export.json herbouwen na verwijderen datapunt mislukt: %s", e)
 
     return JSONResponse({"deleted": res.rowcount})
+
+
+@router.post("/accounts/{account_number}/archive")
+async def account_archive(account_number: str):
+    """Rekening archiveren: verdwijnt van het dashboard en telt niet meer mee
+    in totalen, API en meldingen. Data blijft bewaard."""
+    set_archived(account_number, True)
+    return RedirectResponse(url="/?archived=1", status_code=303)
+
+
+@router.post("/accounts/{account_number}/unarchive")
+async def account_unarchive(account_number: str):
+    set_archived(account_number, False)
+    return RedirectResponse(url="/", status_code=303)
 
 
 @router.post("/refresh-now")
@@ -195,7 +206,10 @@ def session_page(request: Request):
 
         return templates.TemplateResponse(request, "session.html", {
             "now_utc":           now_iso(),
+            "health":            compute_health(),
+            "refresh_rows":      recent_refresh_log(30),
             "keepalive_minutes": keepalive_minutes,
+            "keepalive_active":  cfg.get("mfa_mode") != "totp",
             "session_path":      str(SESSION_STATE_PATH),
             "session_exists":    session_exists,
             "session_mtime":     session_mtime,

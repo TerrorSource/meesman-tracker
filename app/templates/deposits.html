@@ -3,7 +3,7 @@
 
 <div class="card">
   <h2 style="margin:0 0 8px">Inleg bijhouden</h2>
-  <p style="margin:0; color:#555">
+  <p style="margin:0; color:var(--muted)">
     Registreer hier je cash stortingen per rekening. Dividend herbelegging hoef je
     <strong>niet</strong> in te voeren — dat zit al verwerkt in de waarde.
     <br>Het dashboard berekent op basis van deze inleg het <strong>echte rendement</strong>
@@ -93,12 +93,12 @@
     <tbody>
       {% for d in deposits %}
       <tr>
-        <td style="color:#555">{{ d.ts | local_date }}</td>
-        <td>{{ d.label }} <small style="color:#aaa">({{ d.account_number }})</small></td>
+        <td style="color:var(--muted)">{{ d.ts | local_date }}</td>
+        <td>{{ d.label }} <small style="color:var(--muted2)">({{ d.account_number }})</small></td>
         <td style="text-align:right; font-weight:600">
           € {{ "{:,.2f}".format(d.amount_eur|float).replace(",", "X").replace(".", ",").replace("X", ".") }}
         </td>
-        <td style="color:#666">{{ d.note or '' }}</td>
+        <td style="color:var(--muted)">{{ d.note or '' }}</td>
         <td style="white-space:nowrap">
           <button type="button" class="edit-dep" title="Bewerken"
                   data-id="{{ d.id }}"
@@ -108,11 +108,11 @@
                   data-amount="{{ '%.2f'|format(d.amount_eur|float) }}"
                   data-note="{{ d.note or '' }}"
                   style="background:none; border:none; cursor:pointer;
-                         color:#0066cc; padding:2px 6px; font-size:13px">✎</button>
+                         color:var(--accent); padding:2px 6px; font-size:13px">✎</button>
           <form method="post" action="/deposits/delete/{{ d.id }}" style="display:inline"
                 onsubmit="return confirm('Inleg verwijderen?')">
             <button type="submit" title="Verwijderen" style="background:none; border:none; cursor:pointer;
-                    color:#b00020; padding:2px 6px; font-size:13px">✕</button>
+                    color:var(--err); padding:2px 6px; font-size:13px">✕</button>
           </form>
         </td>
       </tr>
@@ -121,7 +121,7 @@
   </table>
 
   <!-- Totalen per rekening -->
-  <div style="margin-top:16px; border-top:1px solid #eee; padding-top:12px">
+  <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px">
     <strong>Totaal per rekening:</strong>
     {% set totals = {} %}
     {% for d in deposits %}
@@ -142,7 +142,7 @@
   </div>
 </div>
 {% else %}
-<div class="card" style="color:#888">
+<div class="card" style="color:var(--muted2)">
   Nog geen inleggen geregistreerd.
 </div>
 {% endif %}

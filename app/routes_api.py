@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 
 from .core import DEPOSITS_PATH, EXPORT_PATH, engine, to_float
-from .store import write_deposits_json, write_export_json
+from .store import archived_accounts, compute_health, write_deposits_json, write_export_json
 
 router = APIRouter()
 
@@ -100,7 +100,9 @@ def deposits_json_endpoint():
 @router.get("/api/sensors")
 def api_sensors():
     """
-    Home Assistant REST sensor endpoint.
+    Home Assistant REST sensor endpoint. Gearchiveerde rekeningen tellen niet
+    mee. Bevat ook de 'versheid' van de data (last_ok_refresh, status) zodat
+    HA kan alarmeren als de tracker stilvalt.
 
     HA configuration example (configuration.yaml):
 
@@ -111,20 +113,14 @@ def api_sensors():
           json_attributes:
             - accounts
             - total
+            - last_ok_refresh
+            - last_ok_age_hours
+            - status
           value_template: "{{ value_json.total }}"
           unit_of_measurement: "EUR"
           scan_interval: 3600
-
-    Per-rekening via template sensor:
-      - platform: template
-        sensors:
-          meesman_beleggingen:
-            value_template: >
-              {{ state_attr('sensor.meesman', 'accounts')
-                 | selectattr('account_number','eq','22404586')
-                 | map(attribute='value_eur') | first }}
-            unit_of_measurement: "EUR"
     """
+    archived = archived_accounts()
     with engine.begin() as conn:
         rows = conn.execute(text("""
             SELECT account_number, label, value_eur, ts
@@ -142,11 +138,18 @@ def api_sensors():
             "value_eur":      to_float(r["value_eur"]),
             "last_updated":   r["ts"],
         }
-        for r in rows
+        for r in rows if r["account_number"] not in archived
     ]
     total = sum(a["value_eur"] for a in accounts)
+    health = compute_health()
 
-    return JSONResponse({"total": round(total, 2), "accounts": accounts})
+    return JSONResponse({
+        "total":             round(total, 2),
+        "accounts":          accounts,
+        "status":            health["status"],
+        "last_ok_refresh":   health["last_ok_refresh"],
+        "last_ok_age_hours": health["last_ok_age_hours"],
+    })
 
 
 @router.get("/api/sensors/{account_number}")
@@ -180,6 +183,7 @@ def api_sensor_account(account_number: str):
         "label":          row["label"],
         "value_eur":      to_float(row["value_eur"]),
         "last_updated":   row["ts"],
+        "archived":       row["account_number"] in archived_accounts(),
     })
 
 

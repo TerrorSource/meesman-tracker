@@ -10,17 +10,20 @@ A self-hosted Docker application that automatically logs into [mijn.meesman.nl](
 
 - **Automatic balance scraping** via Playwright (chromium-headless-shell)
 - **TOTP support** — fully unattended, no manual MFA codes needed
-- **Scheduled refresh at a fixed local time** (default 07:30) with catch-up after a (re)start; interval mode as fallback
+- **Scheduled refresh at a fixed local time** (default 07:30, optionally Mon–Sat or Mon–Fri) with catch-up after a (re)start and two automatic retries (30 and 90 min) after a failed scrape; interval mode as fallback
 - **Self-healing** — retries with a fresh browser context when a stale session blocks the login; restarts the container when Chromium itself can no longer start
 - **Session keepalive** for manual-MFA mode (HTTP cookie check, full browser only every Nth tick); skipped entirely in TOTP mode
-- **Dashboard** with charts (1m / 3m / 1y / all), balance history, return per account and a configurable growth baseline date; individual data points can be deleted from the changes table
+- **Dashboard** with charts (1m / 3m / 1y / all), balance history, return per account, a configurable growth baseline date and a **return-per-calendar-year** table; individual data points can be deleted from the changes table; dark mode follows your system setting
+- **Account archiving** — closed accounts disappear from the dashboard, totals, API and notifications while their history is kept; you get a Telegram notice when a known account no longer appears at Meesman
 - **Deposit tracking** — add, edit and delete deposits; distinguish your own deposits from actual investment returns
 - **Home Assistant REST API** — `/api/sensors` and `/deposits.json`
 - **CSV export** — `/export.csv` and `/deposits.csv` (Dutch Excel format)
-- **Telegram notifications** on balance change, session expiry, repeated refresh failures (incl. recovery), browser failures, and a monthly summary
+- **Telegram notifications** on balance change (with optional € / % thresholds), session expiry, repeated refresh failures (with the debug screenshot attached, incl. recovery), browser failures, missing accounts, and monthly/weekly summaries
 - **Import** of historical `export.json` and `deposits.json` files
 - **Manual data points** — add historical balances for any date
-- **Health endpoint** (`/health`) with app version and `ok`/`degraded` status based on the last successful refresh
+- **Status page** with the last 30 refreshes (time, status, duration, message) and a **health endpoint** (`/health`) with `ok`/`degraded` status; `/api/sensors` carries the same freshness fields for Home Assistant
+- **Daily database backups** (`data/backups/`, consistent copies via `VACUUM INTO`, configurable retention)
+- **Scraper selectors editable in the UI** — fix a Meesman DOM change without waiting for a new release
 - **Selector canary** — a daily GitHub Action checks whether the Meesman login page still matches the scraper's selectors
 - **Automatic housekeeping** — log tables (90 days) and debug dumps (30 days) are pruned at startup
 
@@ -129,6 +132,7 @@ Keep the contents of your `data/` volume — that is all you need:
 | `data/session.json` | Playwright session state (optional, speeds up first login) |
 | `data/cookies.json` | Cookie metadata for the session page (optional) |
 | `data/app.db` (+ `app.db-wal`, `app.db-shm`) | SQLite database. It runs in WAL mode: when backing up a *running* container, copy all three files together, or stop the container first |
+| `data/backups/` | Daily consistent database copies (`app-YYYYMMDD-HHMMSS.db`, made with `VACUUM INTO`) — the easiest thing to restore from: stop the container, copy one over `data/app.db` (remove the `-wal`/`-shm` files), start again |
 
 **Steps (prebuilt image from ghcr.io — default `docker-compose.yml`):**
 ```bash
@@ -214,6 +218,20 @@ sensor:
     scan_interval: 86400
 ```
 
+### Data freshness (alerting when the tracker stalls)
+
+`/api/sensors` also returns `status` (`ok`/`degraded`), `last_ok_refresh` and `last_ok_age_hours`:
+
+```yaml
+template:
+  - binary_sensor:
+      - name: Meesman data stale
+        state: "{{ state_attr('sensor.meesman_total', 'status') != 'ok' }}"
+        device_class: problem
+```
+
+(add `status`, `last_ok_refresh` and `last_ok_age_hours` to `json_attributes` of the REST sensor above)
+
 ---
 
 ## API reference
@@ -230,6 +248,9 @@ sensor:
 | `/health` | GET | Healthcheck with app version |
 | `/refresh-now` | POST | Trigger manual refresh |
 | `/datapoints/delete` | POST | Delete a single balance data point (`account_number` + `ts`) |
+| `/accounts/{account_number}/archive` | POST | Archive an account (hidden from dashboard, totals, API, notifications) |
+| `/accounts/{account_number}/unarchive` | POST | Restore an archived account |
+| `/config/selectors/reset` | POST | Reset the scraper selectors to the defaults |
 | `/import` | GET/POST | Import `export.json` files |
 | `/import/deposits` | POST | Import `deposits.json` |
 | `/import/manual` | POST | Add a single manual data point |
@@ -255,6 +276,7 @@ sensor:
 | `SESSION_STATE_PATH` | `/data/session.json` | Playwright session state |
 | `COOKIES_DUMP_PATH` | `/data/cookies.json` | Cookie dump for the session page |
 | `DEBUG_DIR` | `/data/debug` | Screenshots on scrape failure |
+| `BACKUP_DIR` | `/data/backups` | Daily database copies |
 | `APP_VERSION` / `APP_COMMIT` | `dev` / empty | Set by CI as build args; shown in the footer and `/health` |
 | `SELF_RESTART` | `1` | When Chromium cannot start (host problem), exit the process so Docker restarts the container cleanly. Set to `0` to disable |
 
@@ -268,7 +290,11 @@ The app sends a message automatically on:
 - **Session expired** — only when using manual MFA; with TOTP the app re-logins automatically
 - **Repeated refresh failures** — one warning after 3 consecutive failed refreshes, and a recovery message once refreshing works again
 - **Browser failure** — immediately, when Chromium itself cannot start (a host problem such as memory pressure); the container then restarts itself
-- **Monthly summary** — on the 1st of each month at 08:00: total value, deposits and return for the previous month per account, plus the year-to-date return after deposits
+- **Monthly summary** (on by default) — on the 1st of each month at 08:00: total value, deposits and return for the previous month per account, plus the year-to-date return after deposits
+- **Weekly summary** (optional) — Monday 08:00, same layout for the previous 7 days
+- **Missing account** — once, when a known (non-archived) account no longer appears in the Meesman overview
+
+Thresholds: under *Config → Meldingen* you can require a minimum total change in € and/or % before a balance message is sent (a new account is always announced), and set after how many consecutive failed refreshes the warning goes out.
 
 Example message:
 ```
@@ -286,9 +312,9 @@ Example message:
 
 ## Development, tests and CI
 
-- **Tests:** `pip install -r requirements-dev.txt && pytest -q tests/` — parser/formatting unit tests plus smoke tests that boot the app with a temporary data directory and exercise every route. The same suite runs in GitHub Actions on every pull request (so Dependabot PRs show a green or red merge button) and before every image build.
+- **Tests & lint:** `pip install -r requirements-dev.txt && ruff check app tests scripts && pytest -q tests/` — parser/formatting unit tests, smoke tests that boot the app with a temporary data directory and exercise every route, and an offline regression test of the account-table parser against `tests/fixtures/meesman_overview.html` (needs `playwright install --only-shell chromium`; skipped otherwise). Replace the fixture with an anonymised copy of your own `data/debug/step3_home.html` for maximum realism. The same suite runs in GitHub Actions on every pull request (so Dependabot PRs show a green or red merge button) and before every image build.
 - **Selector canary:** `.github/workflows/selector-canary.yml` opens the Meesman login page daily and fails (→ GitHub notification e-mail) when the login selectors from `app/config_store.py` are gone. It never logs in.
-- **Upgrading Playwright:** a new Playwright means a new Chromium. Bump the version in `requirements.txt` *and* in the canary workflow, then verify locally (`docker build .`, start the container, and launch Chromium once inside it) before pushing. Dependabot is configured to only propose patch updates for Playwright for this reason, to keep the Python base image on 3.11, and to bundle the remaining updates into one grouped PR per week.
+- **Upgrading Playwright:** a new Playwright means a new Chromium. The image runs Python 3.12. Bump the version in `requirements.txt` *and* in the canary workflow, then verify locally (`docker build .`, start the container, and launch Chromium once inside it) before pushing. Dependabot is configured to only propose patch updates for Playwright for this reason, to keep the Python base image on 3.11, and to bundle the remaining updates into one grouped PR per week.
 - **Meesman API research:** every refresh writes `data/debug/api_capture.json` — the URL, status and a 2 KB preview of each JSON response the browser received from `*.meesman.nl`. If the account overview turns out to be available as JSON, scraping can move from DOM parsing to a direct API call (far more robust; Chromium would only be needed for the login).
 
 ---
@@ -327,6 +353,7 @@ meesman-tracker/
 │   └── templates/           # Jinja2 HTML templates
 ├── data/                    # Mounted volume — never committed to Git
 ├── tests/                   # pytest suite (parsers + smoke tests via TestClient)
+│   └── fixtures/            # Offline HTML fixture of the account overview
 ├── scripts/
 │   └── selector_canary.py   # Daily check of the Meesman login selectors
 ├── .github/
@@ -337,7 +364,8 @@ meesman-tracker/
 ├── docker-compose.yml       # Prebuilt image from ghcr.io
 ├── docker-compose.build.yml # Local development build
 ├── requirements.txt
-└── requirements-dev.txt     # + pytest/httpx for the tests
+├── requirements-dev.txt     # + pytest/httpx/ruff for tests and lint
+└── ruff.toml
 ```
 
 ---

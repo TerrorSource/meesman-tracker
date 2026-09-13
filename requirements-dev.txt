@@ -1,4 +1,5 @@
-# Alleen nodig voor de tests (CI en lokaal), niet in het runtime-image
+# Alleen nodig voor de tests en lint (CI en lokaal), niet in het runtime-image
 -r requirements.txt
 pytest==9.1.1
 httpx==0.28.1
+ruff==0.15.4

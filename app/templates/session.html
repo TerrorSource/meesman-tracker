@@ -1,13 +1,58 @@
 {% extends "base.html" %}
 {% block content %}
 
+<!-- ── Status ── -->
 <div class="card">
-  <h2 style="margin:0 0 12px">Sessie &amp; Cookies</h2>
-  <p style="margin:0; color:#555">
-    Bekijk de opgeslagen browsersessie en cookie-vervaldatums.
-    Gebruik dit om te schatten wanneer je opnieuw moet inloggen.
+  <h2 style="margin:0 0 8px">Status</h2>
+  <p style="margin:0">
+    <strong>Gezondheid:</strong>
+    {% if health.status == 'ok' %}
+      <span class="ok">✓ ok</span>
+    {% else %}
+      <span class="err">⚠ degraded</span>
+    {% endif %}
+    &nbsp;—&nbsp;
+    <strong>Laatste geslaagde refresh:</strong>
+    {% if health.last_ok_refresh %}
+      {{ health.last_ok_refresh | local }} <small>({{ health.last_ok_age_hours }} uur geleden)</small>
+    {% else %}
+      <span class="err">nog nooit</span>
+    {% endif %}
     <br><small>Gegenereerd op: {{ now_utc | local }}</small>
   </p>
+</div>
+
+<!-- ── Refresh-geschiedenis ── -->
+<div class="card">
+  <h3 style="margin:0 0 10px">Refresh-geschiedenis <small>(laatste 30)</small></h3>
+  {% if not refresh_rows %}
+    <p><em>Nog geen refreshes gelogd.</em></p>
+  {% else %}
+    <div style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>Tijdstip</th>
+            <th>Status</th>
+            <th class="num">Duur</th>
+            <th class="num">Opgeslagen</th>
+            <th>Melding</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in refresh_rows %}
+          <tr>
+            <td style="white-space:nowrap">{{ r.ts | local }}</td>
+            <td class="{{ 'ok' if r.status == 'ok' else ('muted' if r.status == 'skipped' else 'err') }}">{{ r.status }}</td>
+            <td class="num">{% if r.duration_s %}{{ r.duration_s }} s{% else %}—{% endif %}</td>
+            <td class="num">{{ r.stored_rows }}</td>
+            <td style="word-break:break-word" title="{{ r.message or '' }}">{{ (r.message or '') | truncate(120) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
 </div>
 
 <!-- ── Sessiebestand ── -->
@@ -46,11 +91,7 @@
   {% else %}
     <table style="margin-bottom:12px">
       <tr>
-        <th style="width:200px">Pad</th>
-        <td><code>{{ cookie_summary.path }}</code></td>
-      </tr>
-      <tr>
-        <th>Laatste update</th>
+        <th style="width:200px">Laatste update</th>
         <td>{{ (cookie_summary.mtime | local) or '—' }}</td>
       </tr>
       <tr>
@@ -68,29 +109,31 @@
     </table>
 
     {% if cookie_summary.cookies %}
-    <h4 style="margin:12px 0 6px">Alle cookies</h4>
-    <table>
-      <thead>
-        <tr>
-          <th>Naam</th>
-          <th>Domein</th>
-          <th>Pad</th>
-          <th>Verloopt</th>
-          <th>Over</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for c in cookie_summary.cookies %}
-        <tr>
-          <td><code>{{ c.name }}</code></td>
-          <td>{{ c.domain }}</td>
-          <td>{{ c.path }}</td>
-          <td>{{ c.expires_at | local }}</td>
-          <td>{{ c.expires_in or '(sessie)' }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <details>
+      <summary style="cursor:pointer">Alle cookies</summary>
+      <table style="margin-top:8px">
+        <thead>
+          <tr>
+            <th>Naam</th>
+            <th>Domein</th>
+            <th>Pad</th>
+            <th>Verloopt</th>
+            <th>Over</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in cookie_summary.cookies %}
+          <tr>
+            <td><code>{{ c.name }}</code></td>
+            <td>{{ c.domain }}</td>
+            <td>{{ c.path }}</td>
+            <td>{{ c.expires_at | local }}</td>
+            <td>{{ c.expires_in or '(sessie)' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
     {% endif %}
   {% endif %}
 </div>
@@ -98,32 +141,38 @@
 <!-- ── Keepalive-geschiedenis ── -->
 <div class="card">
   <h3 style="margin:0 0 6px">Keepalive-geschiedenis</h3>
-  <p style="margin:0 0 10px; color:#555">
-    Elke {{ keepalive_minutes }} minuten probeert de app de sessie actief te houden
-    zonder nieuwe data op te slaan.
-  </p>
-
-  {% if not keepalive_rows %}
-    <p><em>Nog geen keepalive-runs gelogd.</em></p>
+  {% if not keepalive_active %}
+    <p style="margin:0; color:var(--muted)">
+      Uitgeschakeld in TOTP-modus — de dagelijkse refresh logt zelf opnieuw in, een aparte keepalive
+      zou alleen extra browserstarts op de NAS opleveren.
+    </p>
   {% else %}
-    <table>
-      <thead>
-        <tr>
-          <th>Tijdstip</th>
-          <th>Status</th>
-          <th>Bericht</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in keepalive_rows %}
-        <tr>
-          <td>{{ r.ts | local }}</td>
-          <td class="{{ 'ok' if r.status in ('ok', 'recovered') else 'err' }}">{{ r.status }}</td>
-          <td>{{ r.message or '' }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <p style="margin:0 0 10px; color:var(--muted)">
+      Elke {{ keepalive_minutes }} minuten probeert de app de sessie actief te houden
+      zonder nieuwe data op te slaan.
+    </p>
+    {% if not keepalive_rows %}
+      <p><em>Nog geen keepalive-runs gelogd.</em></p>
+    {% else %}
+      <table>
+        <thead>
+          <tr>
+            <th>Tijdstip</th>
+            <th>Status</th>
+            <th>Bericht</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in keepalive_rows %}
+          <tr>
+            <td>{{ r.ts | local }}</td>
+            <td class="{{ 'ok' if r.status in ('ok', 'recovered') else 'err' }}">{{ r.status }}</td>
+            <td>{{ r.message or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
   {% endif %}
 </div>
 

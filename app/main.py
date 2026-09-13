@@ -14,13 +14,17 @@ from .config_store import load_config
 from .core import APP_VERSION_FULL, LOCAL_TZ, cfg_has_key, logger
 from .scheduler import scheduler
 from .service_refresh import (
+    backup_tick,
     build_refresh_trigger,
     keepalive_tick,
     monthly_summary_tick,
     refresh_once,
     refresh_stale_threshold_hours,
+    weekly_summary_tick,
 )
 from .store import (
+    backup_database,
+    backup_exists_today,
     last_ok_refresh_dt,
     prune_debug_files,
     prune_old_logs,
@@ -42,10 +46,20 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(keepalive_tick, "interval", minutes=keepalive_minutes,
                       id="keepalive_job", replace_existing=True,
                       coalesce=True, misfire_grace_time=600)
-    # Maandoverzicht: 1e van de maand om 08:00 lokale tijd
+    # Overzichten: maand (1e, 08:00) en week (maandag 08:00) — de ticks
+    # kijken zelf of ze in de config aanstaan
     scheduler.add_job(monthly_summary_tick,
                       CronTrigger(day=1, hour=8, minute=0, timezone=LOCAL_TZ),
                       id="monthly_summary", replace_existing=True,
+                      coalesce=True, misfire_grace_time=6 * 3600)
+    scheduler.add_job(weekly_summary_tick,
+                      CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=LOCAL_TZ),
+                      id="weekly_summary", replace_existing=True,
+                      coalesce=True, misfire_grace_time=6 * 3600)
+    # Dagelijkse databasekopie
+    scheduler.add_job(backup_tick,
+                      CronTrigger(hour=3, minute=30, timezone=LOCAL_TZ),
+                      id="backup_job", replace_existing=True,
                       coalesce=True, misfire_grace_time=6 * 3600)
     scheduler.start()
     logger.info("Scheduler started (refresh %s, keepalive=%dmin, versie=%s)",
@@ -59,6 +73,13 @@ async def lifespan(app: FastAPI):
         prune_debug_files(days=30)
     except Exception as e:
         logger.warning("Startup: opschonen mislukt: %s", e)
+
+    # Backup van vandaag ontbreekt (bijv. na een herstart vóór 03:30)? Nu maken.
+    try:
+        if not backup_exists_today():
+            backup_database(max(1, int(cfg.get("backup_keep") or 14)))
+    except Exception as e:
+        logger.warning("Startup: database-backup mislukt: %s", e)
 
     # Inhaal-refresh: na een (her)start direct verversen als de laatste
     # geslaagde refresh te oud is — anders mis je dagen bij elke deploy

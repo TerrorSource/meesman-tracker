@@ -7,8 +7,8 @@ from app.telegram import build_balance_change_message
 
 
 class _Acc:
-    def __init__(self, n, l, v):
-        self.account_number, self.label, self.value_eur = n, l, v
+    def __init__(self, number, label, value):
+        self.account_number, self.label, self.value_eur = number, label, value
 
 
 @pytest.mark.parametrize("raw, expected", [
@@ -84,3 +84,17 @@ def test_redirect_stub_detection():
 def test_launch_failure_detection():
     assert is_browser_launch_failure(Exception("BrowserType.launch: Timeout 180000ms exceeded")) is True
     assert is_browser_launch_failure(Exception("Page.wait_for_selector: Timeout")) is False
+
+
+def test_balance_message_thresholds_and_exclude():
+    accs = [_Acc("22404586", "Beleggingen", 32655.62), _Acc("25110311", "Pensioen", 56487.84)]
+    prev = {"22404586": 32567.69, "25110311": 56335.74}   # totaal +240,03 (+0,27%)
+    assert build_balance_change_message(accs, prev) is not None
+    assert build_balance_change_message(accs, prev, min_eur=1000) is None        # onder €-drempel
+    assert build_balance_change_message(accs, prev, min_pct=1.0) is None         # onder %-drempel
+    assert build_balance_change_message(accs, prev, min_eur=200, min_pct=0.2) is not None
+    # nieuwe rekening wordt altijd gemeld, ongeacht drempels
+    assert build_balance_change_message(accs, {"22404586": 32567.69}, min_eur=99999) is not None
+    # gearchiveerde rekening blijft buiten het bericht en het totaal
+    msg = build_balance_change_message(accs, prev, exclude={"25110311"})
+    assert "Pensioen" not in msg and "€ 32.655,62" in msg

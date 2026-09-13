@@ -4,7 +4,7 @@
 <!-- ── Bestandsimport ── -->
 <div class="card">
   <h2 style="margin:0 0 8px">Importeer export.json</h2>
-  <p style="margin:0; color:#555">
+  <p style="margin:0; color:var(--muted)">
     Upload één of meerdere <code>export.json</code> bestanden van eerdere exports.
     Bestaande datapunten worden automatisch overgeslagen (op basis van tijdstip + rekeningnummer).
   </p>
@@ -15,7 +15,7 @@
     <h3 style="margin:0 0 12px">
       Resultaat —
       <span class="ok">{{ total_inserted }} nieuw ingevoerd</span>,
-      <span style="color:#888">{{ total_skipped }} overgeslagen</span>
+      <span style="color:var(--muted2)">{{ total_skipped }} overgeslagen</span>
     </h3>
     <table>
       <thead>
@@ -31,10 +31,10 @@
         <tr>
           <td><code>{{ r.file }}</code></td>
           <td style="text-align:right">{% if not r.error %}<strong>{{ r.inserted }}</strong>{% else %}—{% endif %}</td>
-          <td style="text-align:right; color:#888">{% if not r.error %}{{ r.skipped }}{% else %}—{% endif %}</td>
+          <td style="text-align:right; color:var(--muted2)">{% if not r.error %}{{ r.skipped }}{% else %}—{% endif %}</td>
           <td>
             {% if r.error %}<span class="err">✗ {{ r.error }}</span>
-            {% elif r.inserted == 0 %}<span style="color:#888">Niets nieuws</span>
+            {% elif r.inserted == 0 %}<span style="color:var(--muted2)">Niets nieuws</span>
             {% else %}<span class="ok">✓</span>{% endif %}
           </td>
         </tr>
@@ -52,7 +52,7 @@
   <form method="post" action="/import" enctype="multipart/form-data">
     <label>Selecteer export.json bestand(en)</label>
     <input type="file" name="files" accept=".json,application/json" multiple style="margin-bottom:12px" />
-    <small style="display:block; margin-bottom:14px; color:#666">
+    <small style="display:block; margin-bottom:14px; color:var(--muted)">
       Je kunt meerdere bestanden tegelijk selecteren (Ctrl+klik of Cmd+klik).
       Dubbele datapunten worden automatisch overgeslagen.
     </small>
@@ -65,7 +65,7 @@
 <!-- ── Handmatige invoer ── -->
 <div class="card">
   <h3 style="margin:0 0 6px">Handmatig datapunt toevoegen</h3>
-  <p style="margin:0 0 14px; color:#555">
+  <p style="margin:0 0 14px; color:var(--muted)">
     Voeg een historisch saldo toe op een specifieke datum — handig voor beginwaardes
     of punten die niet in een export staan.
   </p>
@@ -194,7 +194,7 @@ dateInp.value = yesterday.toISOString().slice(0, 10);
 <!-- ── Deposits.json import ── -->
 <div class="card">
   <h3 style="margin:0 0 8px">Importeer deposits.json</h3>
-  <p style="margin:0 0 12px; color:#555">
+  <p style="margin:0 0 12px; color:var(--muted)">
     Upload een eerder geëxporteerde <code>deposits.json</code> om inleggen te herstellen
     na een nieuwe installatie. Duplicaten worden automatisch overgeslagen.
   </p>
@@ -203,7 +203,7 @@ dateInp.value = yesterday.toISOString().slice(0, 10);
     <div style="margin-bottom:14px">
       <strong>
         <span class="ok">{{ dep_total_inserted }} inleggen geïmporteerd</span>,
-        <span style="color:#888">{{ dep_total_skipped }} overgeslagen</span>
+        <span style="color:var(--muted2)">{{ dep_total_skipped }} overgeslagen</span>
       </strong>
       <table style="margin-top:8px">
         <thead><tr><th>Bestand</th><th style="text-align:right">Ingevoerd</th><th style="text-align:right">Overgeslagen</th><th>Status</th></tr></thead>
@@ -212,10 +212,10 @@ dateInp.value = yesterday.toISOString().slice(0, 10);
           <tr>
             <td><code>{{ r.file }}</code></td>
             <td style="text-align:right">{% if not r.error %}<strong>{{ r.inserted }}</strong>{% else %}—{% endif %}</td>
-            <td style="text-align:right; color:#888">{% if not r.error %}{{ r.skipped }}{% else %}—{% endif %}</td>
+            <td style="text-align:right; color:var(--muted2)">{% if not r.error %}{{ r.skipped }}{% else %}—{% endif %}</td>
             <td>
               {% if r.error %}<span class="err">✗ {{ r.error }}</span>
-              {% elif r.inserted == 0 %}<span style="color:#888">Niets nieuws</span>
+              {% elif r.inserted == 0 %}<span style="color:var(--muted2)">Niets nieuws</span>
               {% else %}<span class="ok">✓</span>{% endif %}
             </td>
           </tr>
@@ -231,7 +231,7 @@ dateInp.value = yesterday.toISOString().slice(0, 10);
   <form method="post" action="/import/deposits" enctype="multipart/form-data">
     <label>Selecteer deposits.json bestand(en)</label>
     <input type="file" name="files" accept=".json,application/json" multiple style="margin-bottom:12px" />
-    <small style="display:block; margin-bottom:14px; color:#666">
+    <small style="display:block; margin-bottom:14px; color:var(--muted)">
       Het bestand staat in je <code>data/</code> map als <code>deposits.json</code>.
       Download het ook via <a href="/deposits.json">↓ deposits.json</a>.
     </small>

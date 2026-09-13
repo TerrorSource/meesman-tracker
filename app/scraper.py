@@ -71,7 +71,7 @@ def _cookie_expires_iso(expires: float | int | None) -> Optional[str]:
 
 
 async def dump_cookies(context, dump_path: str) -> dict[str, Any]:
-    """Dumps Playwright context cookies to JSON."""
+    """Dumps Playwright context cookie *metadata* to JSON (no values)."""
     cookies = await context.cookies()
     out = []
     soonest = None
@@ -119,7 +119,7 @@ class AccountRow:
 # ---------------------------------------------------------------------------
 def parse_eur_text(s: str) -> float:
     """Parse Dutch-formatted currency strings like '€ 29.869,81' → 29869.81"""
-    s = s.strip().replace("€", "").replace("\u00a0", " ")
+    s = s.strip().replace("€", "").replace(" ", " ")
     s = re.sub(r"[^\d,.\-]", "", s)
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
@@ -142,6 +142,74 @@ def _digits_only(s: str) -> str:
     """Extract digits from strings like '👤 22404586' → '22404586'"""
     m = re.findall(r"\d+", s)
     return "".join(m) if m else s.strip()
+
+
+async def parse_accounts_from_page(page, cfg: dict) -> tuple[List[AccountRow], bool]:
+    """
+    Lees de rekeningtabel uit een (al geladen) pagina.
+
+    Eerst via de geconfigureerde selectors (primair); lukt dat niet, dan
+    een terugval die elke tabel met 'rekeningnummer' + 'waarde' doorzoekt.
+    Returnt (rekeningen, primair_gelukt). Wordt ook offline getest tegen
+    een HTML-fixture (tests/fixtures).
+    """
+    accounts: List[AccountRow] = []
+
+    # ------------------------------------------------------------------
+    # Primary selector: known Meesman desktop table
+    # ------------------------------------------------------------------
+    try:
+        await page.wait_for_selector("table.meesman-table", timeout=15_000)
+        rows = await page.query_selector_all(cfg["accounts_row_selector"])
+
+        for r in rows:
+            num_el = await r.query_selector(cfg["acc_number_selector"])
+            lab_el = await r.query_selector(cfg["acc_label_selector"])
+            val_el = (
+                await r.query_selector(cfg["acc_value_selector"])
+                or await r.query_selector("td:nth-child(4)")
+            )
+
+            if not (num_el and lab_el and val_el):
+                continue
+
+            num = _digits_only(await num_el.inner_text())
+            lab = (await lab_el.inner_text()).strip()
+            val = _parse_eur((await val_el.inner_text()).strip())
+
+            # Skip blank/phantom rows (e.g. an empty totals row with no number/label)
+            if not (num and lab):
+                continue
+
+            accounts.append(AccountRow(account_number=num, label=lab, value_eur=val))
+
+        if accounts:
+            return accounts, True
+    except Exception:
+        pass
+
+    # ------------------------------------------------------------------
+    # Fallback: find any table with "rekeningnummer" + "waarde"
+    # ------------------------------------------------------------------
+    for t in await page.query_selector_all("table"):
+        try:
+            txt = (await t.inner_text()).lower()
+        except Exception:
+            continue
+
+        if "rekeningnummer" in txt and "waarde" in txt:
+            for r in await t.query_selector_all("tbody tr"):
+                tds = await r.query_selector_all("td")
+                if len(tds) < 4:
+                    continue
+                num = _digits_only(await tds[0].inner_text())
+                lab = (await tds[2].inner_text()).strip()
+                val = _parse_eur(await tds[3].inner_text())
+                if num and lab:
+                    accounts.append(AccountRow(account_number=num, label=lab, value_eur=val))
+            break
+
+    return accounts, False
 
 
 # ---------------------------------------------------------------------------
@@ -319,7 +387,7 @@ async def fetch_accounts(
         try:
             await page.wait_for_selector(cfg["accounts_row_selector"], timeout=45_000)
         except Exception:
-            pass  # stap 5/6 proberen het alsnog en dumpen bij falen
+            pass  # de parser probeert het alsnog en we dumpen bij falen
         await dump(page, "step3_home")
 
         # ------------------------------------------------------------------
@@ -336,70 +404,12 @@ async def fetch_accounts(
             except Exception:
                 pass
 
-        accounts: List[AccountRow] = []
-
         # ------------------------------------------------------------------
-        # 5) Primary selector: known Meesman desktop table
+        # 5) Parse the account table (primary selectors, then fallback)
         # ------------------------------------------------------------------
-        try:
-            await page.wait_for_selector("table.meesman-table", timeout=15_000)
-            rows = await page.query_selector_all(cfg["accounts_row_selector"])
-
-            for r in rows:
-                num_el = await r.query_selector(cfg["acc_number_selector"])
-                lab_el = await r.query_selector(cfg["acc_label_selector"])
-                val_el = (
-                    await r.query_selector(cfg["acc_value_selector"])
-                    or await r.query_selector("td:nth-child(4)")
-                )
-
-                if not (num_el and lab_el and val_el):
-                    continue
-
-                num = _digits_only(await num_el.inner_text())
-                lab = (await lab_el.inner_text()).strip()
-                val = _parse_eur((await val_el.inner_text()).strip())
-
-                # Skip blank/phantom rows (e.g. an empty totals row with no number/label)
-                if not (num and lab):
-                    continue
-
-                accounts.append(AccountRow(
-                    account_number=num,
-                    label=lab,
-                    value_eur=val,
-                ))
-
-            if accounts:
-                _write_capture()
-                await ctx.close()
-                await browser.close()
-                return accounts
-
-        except Exception:
+        accounts, primary_ok = await parse_accounts_from_page(page, cfg)
+        if not primary_ok:
             await dump(page, "step4_table_not_found")
-
-        # ------------------------------------------------------------------
-        # 6) Fallback: find any table with "rekeningnummer" + "waarde"
-        # ------------------------------------------------------------------
-        for t in await page.query_selector_all("table"):
-            try:
-                txt = (await t.inner_text()).lower()
-            except Exception:
-                continue
-
-            if "rekeningnummer" in txt and "waarde" in txt:
-                for r in await t.query_selector_all("tbody tr"):
-                    tds = await r.query_selector_all("td")
-                    if len(tds) < 4:
-                        continue
-                    num = _digits_only(await tds[0].inner_text())
-                    lab = (await tds[2].inner_text()).strip()
-                    val = _parse_eur(await tds[3].inner_text())
-                    if num and lab:
-                        accounts.append(AccountRow(account_number=num, label=lab, value_eur=val))
-                break
-
         if not accounts:
             await dump(page, "step5_no_accounts_final")
 

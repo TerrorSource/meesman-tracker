@@ -1,9 +1,11 @@
-"""Orkestratie van refresh en keepalive (scheduler-jobs en handmatige refresh)."""
+"""Orkestratie van refresh, keepalive, overzichten en backups (scheduler-jobs)."""
 from __future__ import annotations
 
 import asyncio
 import os
 import re
+import time
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -20,6 +22,7 @@ from .core import (
     logger,
     now_iso,
 )
+from .scheduler import scheduler
 from .scraper import (
     fetch_accounts,
     http_session_check,
@@ -27,8 +30,13 @@ from .scraper import (
     keepalive_session,
 )
 from .store import (
+    account_labels,
+    archived_accounts,
+    backup_database,
     consecutive_failed_refreshes,
     get_prev_values,
+    latest_debug_screenshot,
+    update_missing_accounts,
     write_export_json,
     write_keepalive_log,
     write_refresh_log,
@@ -36,15 +44,18 @@ from .store import (
 from .telegram import (
     build_balance_change_message,
     build_monthly_summary,
+    build_weekly_summary,
     send_telegram,
+    send_telegram_photo,
     telegram_enabled,
 )
 
 # Eén scrape tegelijk (refresh, keepalive of handmatige refresh)
 scrape_lock = asyncio.Lock()
 
-# Na dit aantal opeenvolgende mislukte refreshes gaat er één Telegram-alert uit
-FAIL_ALERT_THRESHOLD = 3
+# Herkansingen na een mislukte scrape (minuten na de mislukking). Pas als
+# ook de laatste herkansing faalt telt de faalreeks richting de alert.
+RETRY_DELAYS_MIN = (30, 90)
 
 # Elke N-de keepalive-tick gebruikt de echte browser (ververst sessie/cookies);
 # tussendoor volstaat een lichte HTTP-check
@@ -60,14 +71,23 @@ SELF_RESTART_ON_LAUNCH_FAILURE = os.environ.get("SELF_RESTART", "1") != "0"
 # ---------------------------------------------------------------------------
 # Scheduler-trigger voor de refresh
 # ---------------------------------------------------------------------------
+_DAYS = {"daily": None, "mon-sat": "mon-sat", "mon-fri": "mon-fri"}
+
+
 def build_refresh_trigger(cfg: dict):
-    """Cron op een vaste lokale kloktijd (refresh_time 'HH:MM'), anders
-    terugvallen op het interval in refresh_hours. Returnt (trigger, omschrijving)."""
+    """Cron op een vaste lokale kloktijd (refresh_time 'HH:MM', optioneel
+    beperkt tot bepaalde dagen), anders terugvallen op het interval in
+    refresh_hours. Returnt (trigger, omschrijving)."""
     t = (cfg.get("refresh_time") or "").strip()
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", t)
     if m and 0 <= int(m.group(1)) < 24 and 0 <= int(m.group(2)) < 60:
         hh, mm = int(m.group(1)), int(m.group(2))
-        return CronTrigger(hour=hh, minute=mm, timezone=LOCAL_TZ), f"dagelijks om {hh:02d}:{mm:02d}"
+        days = _DAYS.get(cfg.get("refresh_days") or "daily")
+        kwargs = {"hour": hh, "minute": mm, "timezone": LOCAL_TZ}
+        if days:
+            kwargs["day_of_week"] = days
+        label = {"mon-sat": "ma–za", "mon-fri": "ma–vr"}.get(days or "", "dagelijks")
+        return CronTrigger(**kwargs), f"{label} om {hh:02d}:{mm:02d}"
     hours = max(1, int(cfg.get("refresh_hours") or 24))
     return IntervalTrigger(hours=hours), f"elke {hours} uur"
 
@@ -75,33 +95,61 @@ def build_refresh_trigger(cfg: dict):
 def refresh_stale_threshold_hours(cfg: dict) -> float:
     """Na hoeveel uur zonder geslaagde refresh een catch-up nodig is."""
     if (cfg.get("refresh_time") or "").strip():
-        return 26.0  # dagelijkse cron + marge
+        days = cfg.get("refresh_days") or "daily"
+        return {"mon-fri": 26.0 + 48.0, "mon-sat": 26.0 + 24.0}.get(days, 26.0)
     return float(max(1, int(cfg.get("refresh_hours") or 24)))
 
 
 # ---------------------------------------------------------------------------
-# Refresh
+# Refresh (met herkansingen)
 # ---------------------------------------------------------------------------
-async def refresh_once() -> bool:
-    """Geserialiseerde refresh: hooguit één scrape tegelijk. Returnt True bij succes."""
+async def refresh_once(attempt: int = 0) -> bool:
+    """Geserialiseerde refresh: hooguit één scrape tegelijk. Bij een
+    mislukte scrape worden herkansingen ingepland. Returnt True bij succes."""
     async with scrape_lock:
-        return await _do_refresh()
+        ok, kind = await _do_refresh()
+
+    if not ok and kind == "scrape" and attempt < len(RETRY_DELAYS_MIN):
+        delay = RETRY_DELAYS_MIN[attempt]
+        try:
+            scheduler.add_job(
+                refresh_once, "date",
+                run_date=datetime.now(timezone.utc) + timedelta(minutes=delay),
+                id="retry_refresh", replace_existing=True,
+                kwargs={"attempt": attempt + 1},
+            )
+            logger.warning("Refresh mislukt — herkansing %d/%d over %d minuten.",
+                           attempt + 1, len(RETRY_DELAYS_MIN), delay)
+        except Exception as e:
+            logger.warning("Herkansing inplannen mislukt: %s", e)
+    return ok
 
 
 async def _alert_if_failing(cfg: dict) -> None:
-    """Stuur één Telegram-waarschuwing zodra de faalreeks de drempel bereikt."""
+    """Stuur één Telegram-waarschuwing (met screenshot) zodra de faalreeks de
+    ingestelde drempel bereikt."""
     if not telegram_enabled(cfg):
         return
+    threshold = max(1, int(cfg.get("fail_alert_threshold") or 3))
     streak = consecutive_failed_refreshes()
-    if streak == FAIL_ALERT_THRESHOLD:
-        ok, info = await asyncio.to_thread(
-            send_telegram,
-            cfg,
-            f"⚠️ Meesman-tracker: de laatste {streak} refreshes zijn mislukt.\n\n"
-            "Controleer de refresh-log op het dashboard. Mogelijke oorzaken: "
-            "gewijzigde Meesman-site (selectors), verlopen wachtwoord of netwerkproblemen.",
-        )
-        logger.info("Telegram faal-alert verzonden: ok=%s info=%s", ok, info)
+    if streak != threshold:
+        return
+
+    text_msg = (
+        f"⚠️ Meesman-tracker: de laatste {streak} refreshes zijn mislukt.\n\n"
+        "Controleer de statuspagina (refresh-geschiedenis). Mogelijke oorzaken: "
+        "gewijzigde Meesman-site (selectors), verlopen wachtwoord of netwerkproblemen."
+    )
+    shot = latest_debug_screenshot()
+    if shot:
+        ok, info = await asyncio.to_thread(send_telegram_photo, cfg, shot,
+                                           text_msg + f"\n\n📷 Laatste stap: {shot.stem}")
+        if ok:
+            logger.info("Telegram faal-alert (met screenshot) verzonden")
+            return
+        logger.warning("Screenshot versturen mislukt (%s), tekstbericht als fallback", info)
+    ok, info = await asyncio.to_thread(send_telegram, cfg, text_msg)
+    logger.info("Telegram faal-alert verzonden: ok=%s info=%s", ok, info)
 
 
 async def _handle_launch_failure(cfg: dict, context: str) -> None:
@@ -123,13 +171,15 @@ async def _handle_launch_failure(cfg: dict, context: str) -> None:
         asyncio.get_running_loop().call_later(5, os._exit, 3)
 
 
-async def _do_refresh() -> bool:
+async def _do_refresh() -> tuple[bool, str]:
+    """Returnt (ok, soort): soort is 'ok', 'config' (instellingen ontbreken),
+    'scrape' (login/site/netwerk) of 'launch' (Chromium start niet)."""
     cfg = load_config()
 
     if not cfg_has_key(cfg):
         logger.info("Refresh: no master key, skipping.")
         write_refresh_log("skipped", 0, "No master key configured yet")
-        return False
+        return False, "config"
 
     username = (cfg.get("username") or "").strip()
     password = decrypt_if_present(cfg.get("password_enc"))
@@ -137,7 +187,7 @@ async def _do_refresh() -> bool:
     if not username or not password:
         logger.info("Refresh: username/password missing, skipping.")
         write_refresh_log("skipped", 0, "Missing username/password")
-        return False
+        return False, "config"
 
     mfa_mode = cfg.get("mfa_mode", "manual")
 
@@ -149,7 +199,7 @@ async def _do_refresh() -> bool:
             logger.warning("Refresh: %s", msg)
             write_refresh_log("failed", 0, msg)
             await _alert_if_failing(cfg)
-            return False
+            return False, "config"
         totp_secret = ""
     elif mfa_mode == "totp":
         totp_secret = decrypt_if_present(cfg.get("totp_secret_enc")).strip()
@@ -159,11 +209,12 @@ async def _do_refresh() -> bool:
             logger.warning("Refresh: %s", msg)
             write_refresh_log("failed", 0, msg)
             await _alert_if_failing(cfg)
-            return False
+            return False, "config"
     else:
         mfa_code = totp_secret = ""
 
     logger.info("Refresh: starting (mfa_mode=%s)", mfa_mode)
+    t0 = time.monotonic()
 
     try:
         sels = cfg.get("selectors") or {}
@@ -181,13 +232,14 @@ async def _do_refresh() -> bool:
             storage_state_path=str(SESSION_STATE_PATH),
             dump_cookies_path=str(COOKIES_DUMP_PATH),
         )
+        duration = round(time.monotonic() - t0, 1)
 
         if not accounts:
             msg = "Scrape leverde 0 rekeningen op (login/MFA/selectors mislukt)"
             logger.warning("Refresh: %s", msg)
-            write_refresh_log("failed", 0, msg)
+            write_refresh_log("failed", 0, msg, duration)
             await _alert_if_failing(cfg)
-            return False
+            return False, "scrape"
 
         # ------------------------------------------------------------------
         # Compare with previous values (only store when changed)
@@ -211,35 +263,58 @@ async def _do_refresh() -> bool:
         prior_streak = consecutive_failed_refreshes()
 
         write_export_json()
-        logger.info("Refresh: %d rekeningen opgehaald, %d opgeslagen op %s", len(accounts), stored, ts)
-        write_refresh_log("ok", stored, None)
+        logger.info("Refresh: %d rekeningen opgehaald, %d opgeslagen op %s (%.1fs)",
+                    len(accounts), stored, ts, duration)
+        write_refresh_log("ok", stored, None, duration)
+
+        # Verdwenen / teruggekeerde rekeningen (eenmalige melding)
+        newly_missing, reappeared = update_missing_accounts({a.account_number for a in accounts})
+        if reappeared:
+            logger.info("Rekening(en) weer aanwezig in de scrape: %s", ", ".join(reappeared))
 
         # ------------------------------------------------------------------
         # Telegram notifications
         # ------------------------------------------------------------------
         if telegram_enabled(cfg):
-            if prior_streak >= FAIL_ALERT_THRESHOLD:
+            threshold = max(1, int(cfg.get("fail_alert_threshold") or 3))
+            if prior_streak >= threshold:
                 await asyncio.to_thread(
                     send_telegram, cfg,
                     f"✅ Meesman-tracker: refresh werkt weer (na {prior_streak} mislukte pogingen).",
                 )
 
-            msg = build_balance_change_message(accounts, prev_values)
+            if newly_missing:
+                labels = account_labels()
+                namen = ", ".join(f"{labels.get(a, a)} ({a})" for a in newly_missing)
+                await asyncio.to_thread(
+                    send_telegram, cfg,
+                    f"ℹ️ Meesman-tracker: rekening niet meer gevonden bij Meesman: {namen}.\n\n"
+                    "Is de rekening opgeheven? Archiveer hem dan op het dashboard, zodat hij "
+                    "niet meer meetelt in totalen en meldingen.",
+                )
+
+            msg = build_balance_change_message(
+                accounts, prev_values,
+                min_eur=float(cfg.get("notify_min_eur") or 0),
+                min_pct=float(cfg.get("notify_min_pct") or 0),
+                exclude=archived_accounts(),
+            )
             if msg:
                 ok, info = await asyncio.to_thread(send_telegram, cfg, msg)
                 logger.info("Telegram balance update: ok=%s info=%s", ok, info)
 
-        return True
+        return True, "ok"
 
     except Exception as e:
+        duration = round(time.monotonic() - t0, 1)
         msg = f"Onverwachte fout: {type(e).__name__}: {e}"
         logger.exception("Refresh: %s", msg)
-        write_refresh_log("failed", 0, msg)
+        write_refresh_log("failed", 0, msg, duration)
         if is_browser_launch_failure(e):
             await _handle_launch_failure(cfg, "Refresh")
-        else:
-            await _alert_if_failing(cfg)
-        return False
+            return False, "launch"
+        await _alert_if_failing(cfg)
+        return False, "scrape"
 
 
 # ---------------------------------------------------------------------------
@@ -329,20 +404,38 @@ async def keepalive_tick() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Maandoverzicht
+# Periodieke overzichten en backups
 # ---------------------------------------------------------------------------
-async def monthly_summary_tick() -> None:
-    """Stuur op de 1e van de maand een Telegram-overzicht van de afgelopen maand."""
+async def _send_summary(kind: str, builder) -> None:
     cfg = load_config()
-    if not telegram_enabled(cfg):
+    if not telegram_enabled(cfg) or not cfg.get(f"{kind}_summary", False):
         return
     try:
-        msg = build_monthly_summary()
+        msg = builder(exclude=archived_accounts())
     except Exception as e:
-        logger.warning("Maandoverzicht opbouwen mislukt: %s", e)
+        logger.warning("%s-overzicht opbouwen mislukt: %s", kind, e)
         return
     if not msg:
-        logger.info("Maandoverzicht: nog geen data, overgeslagen.")
+        logger.info("%s-overzicht: nog geen data, overgeslagen.", kind)
         return
     ok, info = await asyncio.to_thread(send_telegram, cfg, msg)
-    logger.info("Telegram maandoverzicht: ok=%s info=%s", ok, info)
+    logger.info("Telegram %s-overzicht: ok=%s info=%s", kind, ok, info)
+
+
+async def monthly_summary_tick() -> None:
+    """1e van de maand: overzicht van de afgelopen maand."""
+    await _send_summary("monthly", build_monthly_summary)
+
+
+async def weekly_summary_tick() -> None:
+    """Maandagochtend: overzicht van de afgelopen week."""
+    await _send_summary("weekly", build_weekly_summary)
+
+
+async def backup_tick() -> None:
+    """Dagelijkse databasekopie (VACUUM INTO) met retentie."""
+    cfg = load_config()
+    try:
+        await asyncio.to_thread(backup_database, max(1, int(cfg.get("backup_keep") or 14)))
+    except Exception as e:
+        logger.warning("Database-backup mislukt: %s", e)

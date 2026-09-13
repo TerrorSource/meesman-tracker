@@ -3,38 +3,57 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>Meesman Tracker</title>
   <!-- Lokaal gevendord (chart.js 4.4.3 + date-fns adapter 3.0.0) — werkt ook zonder internet -->
   <script src="/static/vendor/chart.umd.min.js"></script>
   <script src="/static/vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
   <style>
+    :root {
+      --bg: #f5f5f5; --card: #fff; --border: #e0e0e0; --text: #1a1a1a;
+      --muted: #666; --muted2: #888; --faint: #ccc;
+      --ok: #0a7a0a; --err: #b00020; --accent: #0066cc; --accent-dark: #0052a3;
+      --code: #f0f0f0; --grid: #f0f0f0; --th: #fafafa; --btn: #f0f0f0; --btn-hover: #e0e0e0;
+      --input-border: #ccc; --accent-fill: rgba(0,102,204,0.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121417; --card: #1c1f24; --border: #2c3038; --text: #e6e6e6;
+        --muted: #a0a4ab; --muted2: #8a8f97; --faint: #4a4f57;
+        --ok: #5cbf60; --err: #ff6b6b; --accent: #4d9dff; --accent-dark: #2f7fe0;
+        --code: #2a2e35; --grid: #2c3038; --th: #22262c; --btn: #2a2e35; --btn-hover: #343941;
+        --input-border: #444; --accent-fill: rgba(77,157,255,0.12);
+      }
+    }
     *, *::before, *::after { box-sizing: border-box; }
-    body   { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #f5f5f5; color: #1a1a1a; }
-    .topbar { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 10px 20px; display: flex; gap: 16px; align-items: center; }
+    body   { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: var(--bg); color: var(--text); }
+    .topbar { background: var(--card); border-bottom: 1px solid var(--border); padding: 10px 20px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
     .topbar strong { font-size: 15px; }
-    .topbar a  { text-decoration: none; color: #0066cc; font-size: 14px; }
+    .topbar a  { text-decoration: none; color: var(--accent); font-size: 14px; }
     .topbar a:hover { text-decoration: underline; }
     .topbar .push { margin-left: auto; }
     .main  { max-width: 960px; margin: 24px auto; padding: 0 16px; }
-    .card  { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; }
+    .card  { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; }
     .grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
     canvas { max-width: 100%; }
     label  { display: block; font-size: 13px; font-weight: 600; margin-top: 12px; margin-bottom: 4px; }
-    input, select { width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; }
-    input:focus, select:focus { outline: 2px solid #0066cc; border-color: transparent; }
-    button { padding: 8px 14px; border-radius: 8px; border: 1px solid #ccc; background: #f0f0f0; cursor: pointer; font-size: 14px; }
-    button:hover { background: #e0e0e0; }
-    button.primary { background: #0066cc; color: #fff; border-color: #0052a3; }
-    button.primary:hover { background: #0052a3; }
-    small  { color: #666; font-size: 12px; }
-    .ok    { color: #0a7a0a; }
-    .err   { color: #b00020; }
-    code   { background: #f0f0f0; border-radius: 4px; padding: 1px 4px; font-size: 12px; }
+    input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--input-border); border-radius: 8px; font-size: 14px; background: var(--card); color: var(--text); }
+    input:focus, select:focus { outline: 2px solid var(--accent); border-color: transparent; }
+    button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--input-border); background: var(--btn); color: var(--text); cursor: pointer; font-size: 14px; }
+    button:hover { background: var(--btn-hover); }
+    button.primary { background: var(--accent); color: #fff; border-color: var(--accent-dark); }
+    button.primary:hover { background: var(--accent-dark); }
+    small  { color: var(--muted); font-size: 12px; }
+    .ok    { color: var(--ok); }
+    .err   { color: var(--err); }
+    .muted { color: var(--muted); }
+    code   { background: var(--code); border-radius: 4px; padding: 1px 4px; font-size: 12px; }
     table  { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
-    th     { font-weight: 600; background: #fafafa; }
-    hr     { border: none; border-top: 1px solid #e8e8e8; margin: 16px 0; }
+    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+    th     { font-weight: 600; background: var(--th); }
+    hr     { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+    .num   { text-align: right; font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
@@ -44,7 +63,7 @@
     <a href="/deposits">Inleg</a>
     <a href="/import">Importeer</a>
     <a href="/config">Config</a>
-    <a href="/session">Sessie</a>
+    <a href="/session">Status</a>
     <div class="push">
       <form action="/refresh-now" method="post" style="display:inline">
         <button type="submit" class="primary">↻ Refresh nu</button>
@@ -53,7 +72,7 @@
   </div>
   <div class="main">
     {% block content %}{% endblock %}
-    <div style="text-align:center; color:#bbb; font-size:11px; margin:8px 0 16px">
+    <div style="text-align:center; color:var(--muted2); font-size:11px; margin:8px 0 16px">
       meesman-tracker {{ app_version }}
     </div>
   </div>

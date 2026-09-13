@@ -1,0 +1,39 @@
+<!doctype html>
+<!--
+  Synthetische kopie van het Meesman-rekeningoverzicht, opgebouwd volgens de
+  standaard-selectors in app/config_store.py. Vervang gerust door een
+  geanonimiseerde kopie van data/debug/step3_home.html van de NAS voor een
+  nog realistischere regressietest.
+-->
+<html lang="nl">
+<head><meta charset="utf-8"><title>MijnMeesman — Overzicht</title></head>
+<body>
+  <h1>Mijn rekeningen</h1>
+  <table class="meesman-table">
+    <thead>
+      <tr><th>Rekeningnummer</th><th>Type</th><th>Naam</th><th>Waarde</th></tr>
+    </thead>
+    <tbody>
+      <tr class="grid-row">
+        <td>👤 22404586</td>
+        <td>Beleggingsrekening</td>
+        <td>Beleggingen</td>
+        <td><a class="text-body" href="#">€ 33.192,87</a></td>
+      </tr>
+      <tr class="grid-row">
+        <td>👤 25110311</td>
+        <td>Pensioenrekening</td>
+        <td>Pensioen</td>
+        <td><a class="text-body" href="#">€ 57.417,17</a></td>
+      </tr>
+      <!-- lege totaalregel zoals Meesman die soms toont — moet genegeerd worden -->
+      <tr class="grid-row">
+        <td></td>
+        <td></td>
+        <td></td>
+        <td><a class="text-body" href="#">€ 0,00</a></td>
+      </tr>
+    </tbody>
+  </table>
+</body>
+</html>

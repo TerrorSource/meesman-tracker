@@ -1,0 +1,8 @@
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W"]
+# E501: lange regels (tabellen/strings), E402: imports na env-setup in conftest,
+# E731: lambda-toewijzing in routes_config
+ignore = ["E501", "E402", "E731"]

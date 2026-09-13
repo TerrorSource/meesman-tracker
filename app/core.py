@@ -47,6 +47,7 @@ SESSION_STATE_PATH = Path(os.environ.get("SESSION_STATE_PATH", str(DATA_DIR / "s
 COOKIES_DUMP_PATH  = Path(os.environ.get("COOKIES_DUMP_PATH",  str(DATA_DIR / "cookies.json")))
 DEPOSITS_PATH      = Path(os.environ.get("DEPOSITS_PATH",      str(DATA_DIR / "deposits.json")))
 DEBUG_DIR          = Path(os.environ.get("DEBUG_DIR",          str(DATA_DIR / "debug")))
+BACKUP_DIR         = Path(os.environ.get("BACKUP_DIR",         str(DATA_DIR / "backups")))
 
 # ---------------------------------------------------------------------------
 # DB + templates (singletons)

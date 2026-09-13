@@ -10,6 +10,7 @@
       <strong>Status:</strong>
       <span class="{{ 'ok' if last_refresh.status == 'ok' else 'err' }}">{{ last_refresh.status }}</span>
       &nbsp;—&nbsp;<strong>Opgeslagen:</strong> {{ last_refresh.stored_rows }} rij(en)
+      &nbsp;<small><a href="/session">geschiedenis →</a></small>
     </p>
     {% if last_refresh.message %}
       <p class="err" style="margin:6px 0 0; word-break:break-word" title="{{ last_refresh.message }}">
@@ -36,7 +37,7 @@
 
 <div id="totaal-card" class="card" style="display:none">
   <span id="totaal-value"></span>
-  <div style="margin-top:10px; font-size:12px; color:#666; display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+  <div style="margin-top:10px; font-size:12px; color:var(--muted); display:flex; align-items:center; gap:8px; flex-wrap:wrap">
     <span>Groei sinds:</span>
     <input type="date" id="baseline-date" style="width:auto; padding:4px 8px; font-size:12px" />
     <button type="button" id="baseline-reset" style="font-size:12px; padding:4px 8px">↺ Eerste meting</button>
@@ -50,7 +51,50 @@
   </div>
 </div>
 
+{% if yearly %}
+<div class="card">
+  <h3 style="margin:0 0 10px">Rendement per kalenderjaar</h3>
+  <div style="overflow-x:auto">
+    <table>
+      <thead>
+        <tr>
+          <th>Jaar</th>
+          <th class="num">Begin</th>
+          <th class="num">Inleg</th>
+          <th class="num">Eind</th>
+          <th class="num">Rendement</th>
+          <th class="num">%</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for y in yearly %}
+        <tr>
+          <td>{{ y.year }}{% if y.partial %} <small>(lopend)</small>{% endif %}</td>
+          <td class="num">€ {{ "{:,.2f}".format(y.begin).replace(",", "X").replace(".", ",").replace("X", ".") }}</td>
+          <td class="num">{% if y.deposits %}{{ '+' if y.deposits > 0 else '-' }}€ {{ "{:,.2f}".format(y.deposits|abs).replace(",", "X").replace(".", ",").replace("X", ".") }}{% else %}—{% endif %}</td>
+          <td class="num">€ {{ "{:,.2f}".format(y.end).replace(",", "X").replace(".", ",").replace("X", ".") }}</td>
+          <td class="num {{ 'ok' if y.ret >= 0 else 'err' }}" style="font-weight:600">{{ '+' if y.ret >= 0 else '-' }}€ {{ "{:,.2f}".format(y.ret|abs).replace(",", "X").replace(".", ",").replace("X", ".") }}</td>
+          <td class="num {{ 'ok' if y.ret >= 0 else 'err' }}">{{ "{:+.2f}".format(y.pct).replace(".", ",") }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <small>Rendement = eindwaarde − beginwaarde − inleg in dat jaar. Beginwaarde is de laatste meting vóór 1 januari (of de eerste meting in het jaar).</small>
+</div>
+{% endif %}
+
 <div id="charts"></div>
+
+{% if archived_count %}
+  <p style="text-align:center; margin:4px 0 16px">
+    {% if show_archived %}
+      <small><a href="/">Gearchiveerde rekeningen verbergen</a></small>
+    {% else %}
+      <small><a href="/?archived=1">{{ archived_count }} gearchiveerde rekening{{ 'en' if archived_count > 1 else '' }} tonen</a></small>
+    {% endif %}
+  </p>
+{% endif %}
 
 <script>
   window.__PAYLOAD__ = {{ payload_json | safe }};

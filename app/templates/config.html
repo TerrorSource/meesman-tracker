@@ -115,12 +115,22 @@
           Aanbevolen boven het interval: verschuift niet bij herstarts.</small>
       </div>
       <div>
-        <label>Refresh-interval (uren) <small>(alleen als de tijd hierboven leeg is)</small></label>
-        <input name="refresh_hours" type="number" min="1" max="168" value="{{ cfg.refresh_hours or 24 }}" />
-        <small>Terugvaloptie: elke N uur sinds containerstart.</small>
+        <label>Op welke dagen</label>
+        <select name="refresh_days">
+          <option value="daily"   {{ 'selected' if cfg.refresh_days == 'daily' else '' }}>Elke dag</option>
+          <option value="mon-sat" {{ 'selected' if cfg.refresh_days == 'mon-sat' else '' }}>Maandag t/m zaterdag</option>
+          <option value="mon-fri" {{ 'selected' if cfg.refresh_days == 'mon-fri' else '' }}>Maandag t/m vrijdag</option>
+        </select>
+        <small>De refresh van zaterdagochtend legt de slotkoers van vrijdag vast; met "ma–vr"
+          zie je die pas maandag. Minder dagen = minder browserstarts op de NAS.</small>
       </div>
     </div>
     <div class="grid" style="margin-top:4px">
+      <div>
+        <label>Refresh-interval (uren) <small>(alleen als de tijd leeg is)</small></label>
+        <input name="refresh_hours" type="number" min="1" max="168" value="{{ cfg.refresh_hours or 24 }}" />
+        <small>Terugvaloptie: elke N uur sinds containerstart.</small>
+      </div>
       <div>
         <label>Keepalive-interval (minuten)</label>
         <input name="keepalive_minutes" type="number" min="5" max="120" value="{{ cfg.keepalive_minutes or 30 }}" />
@@ -134,7 +144,7 @@
   <div class="card">
     <h3 style="margin:0 0 4px">Telegram</h3>
     <small style="display:block; margin-bottom:10px">
-      Je ontvangt een bericht bij saldo-wijziging én wanneer de sessie verloopt.
+      Berichten bij saldo-wijziging, storingen, verdwenen rekeningen en (optioneel) periodieke overzichten.
     </small>
     <div class="grid">
       <div>
@@ -151,14 +161,85 @@
     </div>
   </div>
 
-  <div style="margin-bottom:24px;">
+  <!-- ── Meldingen ── -->
+  <div class="card">
+    <h3 style="margin:0 0 4px">Meldingen</h3>
+    <div class="grid">
+      <div>
+        <label>Saldo-bericht alleen bij wijziging vanaf (€)</label>
+        <input name="notify_min_eur" type="text" inputmode="decimal" value="{{ cfg.notify_min_eur or 0 }}" />
+        <small>0 = elke wijziging melden. Een nieuwe rekening wordt altijd gemeld.</small>
+      </div>
+      <div>
+        <label>… én vanaf (%)</label>
+        <input name="notify_min_pct" type="text" inputmode="decimal" value="{{ cfg.notify_min_pct or 0 }}" />
+        <small>Beide drempels gelden voor de <em>totale</em> wijziging; 0 = geen drempel.</small>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:4px">
+      <div>
+        <label>Storingsalert na N mislukte refreshes</label>
+        <input name="fail_alert_threshold" type="number" min="1" max="20" value="{{ cfg.fail_alert_threshold or 3 }}" />
+        <small>Een mislukte refresh krijgt eerst twee herkansingen (na 30 en 90 min); elke poging telt.</small>
+      </div>
+      <div>
+        <label>Periodieke overzichten</label>
+        <label style="font-weight:normal; display:flex; gap:8px; align-items:center; margin-top:6px; cursor:pointer">
+          <input type="checkbox" name="monthly_summary" value="1" {{ 'checked' if cfg.monthly_summary else '' }} style="width:auto" />
+          Maandoverzicht (1e van de maand, 08:00)
+        </label>
+        <label style="font-weight:normal; display:flex; gap:8px; align-items:center; margin-top:6px; cursor:pointer">
+          <input type="checkbox" name="weekly_summary" value="1" {{ 'checked' if cfg.weekly_summary else '' }} style="width:auto" />
+          Weekoverzicht (maandag, 08:00)
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Backups ── -->
+  <div class="card">
+    <h3 style="margin:0 0 4px">Backups</h3>
+    <div class="grid">
+      <div>
+        <label>Aantal dagelijkse databasekopieën bewaren</label>
+        <input name="backup_keep" type="number" min="1" max="365" value="{{ cfg.backup_keep or 14 }}" />
+        <small>Elke nacht om 03:30 een consistente kopie in <code>data/backups/</code> (ook direct na een herstart als die van vandaag ontbreekt).</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Selectors ── -->
+  <div class="card">
+    <h3 style="margin:0 0 4px">Scraper-selectors <small>(geavanceerd)</small></h3>
+    <small style="display:block; margin-bottom:6px">
+      CSS-selectors waarmee de scraper de Meesman-pagina's leest. Alleen aanpassen als Meesman de site
+      verandert (de dagelijkse <em>selector canary</em> op GitHub waarschuwt je dan). Leeg = standaardwaarde.
+    </small>
+    <div class="grid">
+      {% for k in cfg.selector_keys %}
+      <div>
+        <label style="font-family:monospace; font-weight:normal">{{ k }}</label>
+        <input name="sel_{{ k }}" value="{{ cfg.selectors.get(k, '') }}"
+               placeholder="{{ cfg.selector_defaults[k] }}" autocomplete="off" spellcheck="false"
+               style="font-family:monospace; font-size:12px" />
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div style="margin-bottom:24px; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
     <button type="submit" class="primary" {% if not cfg.has_key %}disabled{% endif %}>
       💾 Opslaan
     </button>
     {% if not cfg.has_key %}
-      <small class="err" style="margin-left:8px">Genereer eerst een master key.</small>
+      <small class="err">Genereer eerst een master key.</small>
     {% endif %}
   </div>
+</form>
+
+<form method="post" action="/config/selectors/reset" style="margin:-12px 0 24px"
+      onsubmit="return confirm('Alle selectors terugzetten naar de standaardwaarden?')">
+  <button type="submit">↺ Selectors terugzetten naar standaard</button>
 </form>
 
 <script>
