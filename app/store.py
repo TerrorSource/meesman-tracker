@@ -500,13 +500,19 @@ def backup_database(keep: int = 14) -> Path:
     finally:
         raw.close()
 
-    backups = sorted(BACKUP_DIR.glob("app-*.db"))
-    for old in backups[:-keep] if keep > 0 else []:
+    # Retentie: op bestandstijd (niet op naam — het '-N'-suffix sorteert
+    # anders verkeerd) en de zojuist gemaakte kopie blijft altijd staan.
+    others = sorted(
+        (b for b in BACKUP_DIR.glob("app-*.db") if b != target),
+        key=lambda b: b.stat().st_mtime_ns,
+    )
+    surplus = len(others) + 1 - max(1, keep)
+    for old in others[:surplus] if surplus > 0 else []:
         try:
             old.unlink()
         except Exception:
             pass
-    logger.info("Database-backup: %s (%d bewaard)", target.name, min(len(backups), keep))
+    logger.info("Database-backup: %s (%d bewaard)", target.name, min(len(others) + 1, max(1, keep)))
     return target
 
 
