@@ -8,6 +8,12 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      # Playwright-upgrades brengen een nieuwe Chromium mee en moeten
+      # bewust + met lokale buildtest gedaan worden (zie README).
+      # Alleen patch-updates komen automatisch als PR binnen.
+      - dependency-name: "playwright"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: "docker"
     directory: "/"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -15,6 +16,27 @@ _HTTP_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
+
+logger = logging.getLogger("meesman")
+
+# Sinds de login-migratie (juli 2026) serveert mijn.meesman.nl zonder geldige
+# sessie een 200 met alleen een JS-redirect-stubje naar de OAuth-flow.
+_STUB_MARKER = "signInWithMeesmanAuthentication"
+
+# Max. aantal API-responses dat per refresh wordt vastgelegd (api_capture.json)
+_API_CAPTURE_LIMIT = 50
+
+
+def is_browser_launch_failure(exc: BaseException) -> bool:
+    """True als Chromium zelf niet kon starten (omgevingsprobleem op de host:
+    zombie-processen, geheugen, schijf). Dat lost zichzelf nooit op door
+    opnieuw te proberen — daar hoort een directe alert + herstart bij."""
+    return "BrowserType.launch" in str(exc)
+
+
+def _is_redirect_stub(body: str) -> bool:
+    """Herkent het ~200-bytes JS-stubje dat mijn.meesman.nl zonder sessie teruggeeft."""
+    return len(body) < 2000 and _STUB_MARKER in body
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +79,17 @@ async def dump_cookies(context, dump_path: str) -> dict[str, Any]:
         exp_iso = _cookie_expires_iso(c.get("expires"))
         if exp_iso and (soonest is None or exp_iso < soonest):
             soonest = exp_iso
-        out.append({**c, "expires_iso": exp_iso})
+        # Alleen metadata — de cookie-wáárdes staan al in session.json en
+        # hoeven niet nog een keer in platte tekst op schijf.
+        out.append({
+            "name":        c.get("name"),
+            "domain":      c.get("domain"),
+            "path":        c.get("path"),
+            "expires":     c.get("expires"),
+            "expires_iso": exp_iso,
+            "secure":      c.get("secure"),
+            "httpOnly":    c.get("httpOnly"),
+        })
 
     payload = {
         "generated_at": _now_iso(),
@@ -148,6 +180,43 @@ async def fetch_accounts(
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # API-capture: leg JSON-responses van *.meesman.nl vast (url, status,
+    # preview) in debug/api_capture.json. Doel: onderzoeken of het
+    # rekeningoverzicht als JSON beschikbaar is, zodat DOM-scraping op
+    # termijn vervangen kan worden door een API-call.
+    # ------------------------------------------------------------------
+    captured: list[dict] = []
+
+    async def _capture_response(resp) -> None:
+        try:
+            url = resp.url
+            if "meesman.nl" not in url or len(captured) >= _API_CAPTURE_LIMIT:
+                return
+            ctype = (resp.headers.get("content-type") or "").lower()
+            if "json" not in ctype:
+                return
+            entry: dict = {"url": url, "status": resp.status, "content_type": ctype}
+            try:
+                body = await resp.text()
+                entry["size"] = len(body)
+                entry["preview"] = body[:2000]
+            except Exception:
+                pass
+            captured.append(entry)
+        except Exception:
+            pass
+
+    def _write_capture() -> None:
+        try:
+            (debug_dir / "api_capture.json").write_text(
+                json.dumps({"generated_at": _now_iso(), "responses": captured},
+                           ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
     # Resolve MFA code before starting the browser
     mfa_mode = cfg.get("mfa_mode", "manual")
     mfa_code = ""
@@ -167,22 +236,47 @@ async def fetch_accounts(
 
         ctx  = await browser.new_context(**ctx_kwargs)
         page = await ctx.new_page()
+        page.on("response", _capture_response)
 
         # ------------------------------------------------------------------
         # 1) Navigate to login – reuse session if possible
         # ------------------------------------------------------------------
-        await page.goto(login_url, wait_until="domcontentloaded")
-
         # Wacht op het loginformulier óf een al-ingelogde rekeningtabel
-        # (gecombineerde CSS-selector), en kijk daarna welke van de twee er staat.
+        # (gecombineerde CSS-selector). Ruime timeout: de loginflow loopt via
+        # een externe identity-provider en kan op NAS-hardware traag zijn.
+        combined_selector = f'{cfg["login_user_selector"]}, {cfg["accounts_row_selector"]}'
+
+        await page.goto(login_url, wait_until="domcontentloaded")
         try:
-            await page.wait_for_selector(
-                f'{cfg["login_user_selector"]}, {cfg["accounts_row_selector"]}',
-                timeout=22_000,
-            )
+            await page.wait_for_selector(combined_selector, timeout=45_000)
         except Exception:
             await dump(page, "step0_login_timeout")
-            raise
+            if not ctx_kwargs:
+                # Er was al geen opgeslagen sessie — niets om weg te gooien
+                raise
+
+            # Zelfherstel: een verouderde opgeslagen sessie kan de (gewijzigde)
+            # loginflow blokkeren. Gooi de sessie weg en probeer één keer
+            # opnieuw met een schone browsercontext.
+            logger.warning(
+                "Login-wachtstap faalde met opgeslagen sessie — "
+                "sessie wordt gewist, retry met schone context."
+            )
+            await ctx.close()
+            try:
+                Path(storage_state_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            ctx  = await browser.new_context()
+            page = await ctx.new_page()
+            page.on("response", _capture_response)
+            await page.goto(login_url, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_selector(combined_selector, timeout=45_000)
+            except Exception:
+                await dump(page, "step0_login_timeout_retry")
+                raise
 
         logged_in = (await page.query_selector(cfg["accounts_row_selector"])) is not None
 
@@ -209,6 +303,7 @@ async def fetch_accounts(
             else:
                 # MFA field appeared but we have no code
                 await dump(page, "step2_mfa_no_code")
+                _write_capture()
                 await ctx.close()
                 await browser.close()
                 return []
@@ -219,7 +314,12 @@ async def fetch_accounts(
         # 3) Navigate to account overview
         # ------------------------------------------------------------------
         await page.goto(home_url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(1_500)
+        # Wacht op de rekeningtabel i.p.v. een vaste pauze: via de nieuwe
+        # OAuth-redirectketen kan het overzicht op NAS-hardware even duren.
+        try:
+            await page.wait_for_selector(cfg["accounts_row_selector"], timeout=45_000)
+        except Exception:
+            pass  # stap 5/6 proberen het alsnog en dumpen bij falen
         await dump(page, "step3_home")
 
         # ------------------------------------------------------------------
@@ -242,7 +342,7 @@ async def fetch_accounts(
         # 5) Primary selector: known Meesman desktop table
         # ------------------------------------------------------------------
         try:
-            await page.wait_for_selector("table.meesman-table", timeout=12_000)
+            await page.wait_for_selector("table.meesman-table", timeout=15_000)
             rows = await page.query_selector_all(cfg["accounts_row_selector"])
 
             for r in rows:
@@ -271,6 +371,7 @@ async def fetch_accounts(
                 ))
 
             if accounts:
+                _write_capture()
                 await ctx.close()
                 await browser.close()
                 return accounts
@@ -302,6 +403,7 @@ async def fetch_accounts(
         if not accounts:
             await dump(page, "step5_no_accounts_final")
 
+        _write_capture()
         await ctx.close()
         await browser.close()
         return accounts
@@ -322,6 +424,7 @@ async def keepalive_session(
     """
     home_url = "https://mijn.meesman.nl/"
     selector = (cfg.get("accounts_row_selector") or "").strip()
+    login_selector = (cfg.get("login_user_selector") or "").strip()
     if not selector:
         return False
 
@@ -337,7 +440,15 @@ async def keepalive_session(
         page = await ctx.new_page()
 
         await page.goto(home_url, wait_until="domcontentloaded", timeout=60_000)
-        await page.wait_for_timeout(1_500)
+
+        # Wacht tot óf de rekeningtabel (ingelogd) óf het loginformulier
+        # (verlopen) verschijnt — geen vaste pauze, die was op de NAS te kort
+        # en gaf valse "sessie verlopen"-meldingen met onnodige re-logins.
+        wait_for = f"{selector}, {login_selector}" if login_selector else selector
+        try:
+            await page.wait_for_selector(wait_for, timeout=45_000)
+        except Exception:
+            pass
 
         logged_in = False
         try:
@@ -409,6 +520,10 @@ def http_session_check(storage_state_path: str) -> Optional[bool]:
         final_url = (r.url or "").lower()
 
         if "login" in final_url:
+            return False
+        # Zonder geldige sessie komt er een 200 met alleen het redirect-stubje
+        # terug — dat is dus "niet ingelogd", geen succes.
+        if _is_redirect_stub(r.text or ""):
             return False
         if r.status_code == 200 and "mijn.meesman.nl" in final_url:
             return True

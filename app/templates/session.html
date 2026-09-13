@@ -6,7 +6,7 @@
   <p style="margin:0; color:#555">
     Bekijk de opgeslagen browsersessie en cookie-vervaldatums.
     Gebruik dit om te schatten wanneer je opnieuw moet inloggen.
-    <br><small>Gegenereerd op: {{ now_utc }}</small>
+    <br><small>Gegenereerd op: {{ now_utc | local }}</small>
   </p>
 </div>
 
@@ -31,7 +31,7 @@
     {% if session_mtime %}
     <tr>
       <th>Laatste update</th>
-      <td>{{ session_mtime }}</td>
+      <td>{{ session_mtime | local }}</td>
     </tr>
     {% endif %}
   </table>
@@ -50,8 +50,8 @@
         <td><code>{{ cookie_summary.path }}</code></td>
       </tr>
       <tr>
-        <th>Laatste update (UTC)</th>
-        <td>{{ cookie_summary.mtime or '—' }}</td>
+        <th>Laatste update</th>
+        <td>{{ (cookie_summary.mtime | local) or '—' }}</td>
       </tr>
       <tr>
         <th>Aantal cookies</th>
@@ -59,11 +59,11 @@
       </tr>
       <tr>
         <th>Vroegste vervaldatum</th>
-        <td>{{ cookie_summary.soonest_expires_at or '(geen)' }}</td>
+        <td>{{ (cookie_summary.soonest_expires_at | local) or '(geen)' }}</td>
       </tr>
       <tr>
         <th>Laatste vervaldatum</th>
-        <td>{{ cookie_summary.latest_expires_at or '(geen)' }}</td>
+        <td>{{ (cookie_summary.latest_expires_at | local) or '(geen)' }}</td>
       </tr>
     </table>
 
@@ -75,7 +75,7 @@
           <th>Naam</th>
           <th>Domein</th>
           <th>Pad</th>
-          <th>Verloopt (UTC)</th>
+          <th>Verloopt</th>
           <th>Over</th>
         </tr>
       </thead>
@@ -85,7 +85,7 @@
           <td><code>{{ c.name }}</code></td>
           <td>{{ c.domain }}</td>
           <td>{{ c.path }}</td>
-          <td>{{ c.expires_at or '' }}</td>
+          <td>{{ c.expires_at | local }}</td>
           <td>{{ c.expires_in or '(sessie)' }}</td>
         </tr>
         {% endfor %}
@@ -109,7 +109,7 @@
     <table>
       <thead>
         <tr>
-          <th>Tijdstip (UTC)</th>
+          <th>Tijdstip</th>
           <th>Status</th>
           <th>Bericht</th>
         </tr>
@@ -117,7 +117,7 @@
       <tbody>
         {% for r in keepalive_rows %}
         <tr>
-          <td>{{ r.ts }}</td>
+          <td>{{ r.ts | local }}</td>
           <td class="{{ 'ok' if r.status in ('ok', 'recovered') else 'err' }}">{{ r.status }}</td>
           <td>{{ r.message or '' }}</td>
         </tr>

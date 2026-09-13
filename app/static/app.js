@@ -11,6 +11,43 @@
   const totalVal      = document.getElementById("totaal-value");
   const baselineInp   = document.getElementById("baseline-date");
   const baselineReset = document.getElementById("baseline-reset");
+  const periodBtns    = document.getElementById("period-buttons");
+
+  // ── Grafiekperiode (1m / 3m / 1j / alles) — keuze bewaard in localStorage ──
+  const PERIOD_KEY = "meesman_chart_days";
+  let periodDays = parseInt(localStorage.getItem(PERIOD_KEY) || "0", 10) || 0;
+
+  function syncPeriodButtons() {
+    if (!periodBtns) return;
+    periodBtns.querySelectorAll("button").forEach((b) => {
+      const active = parseInt(b.dataset.days, 10) === periodDays;
+      b.style.background = active ? "#0066cc" : "";
+      b.style.color      = active ? "#fff" : "";
+      b.style.borderColor = active ? "#0052a3" : "";
+    });
+  }
+  if (periodBtns) {
+    periodBtns.querySelectorAll("button").forEach((b) => {
+      b.addEventListener("click", () => {
+        periodDays = parseInt(b.dataset.days, 10) || 0;
+        if (periodDays) localStorage.setItem(PERIOD_KEY, String(periodDays));
+        else localStorage.removeItem(PERIOD_KEY);
+        syncPeriodButtons();
+        render();
+      });
+    });
+    syncPeriodButtons();
+  }
+
+  // Punten voor de grafiek binnen de gekozen periode; het laatste punt vóór
+  // de periode blijft staan als ankerpunt zodat de lijn niet 'in het niets' begint.
+  function chartPoints(pts) {
+    if (!periodDays || !pts.length) return pts;
+    const cutoff = new Date(Date.now() - periodDays * 86400000).toISOString();
+    const inside = pts.filter((p) => p.x >= cutoff);
+    const before = pts.filter((p) => p.x < cutoff);
+    return before.length ? [before[before.length - 1], ...inside] : inside;
+  }
 
   // ── Peildatum (groei sinds…) — keuze bewaard in localStorage ─────────────
   const BASELINE_KEY = "meesman_baseline_date";
@@ -219,7 +256,7 @@
         data: {
           datasets: [{
             label:           acc.label,
-            data:            acc.points,
+            data:            chartPoints(acc.points),
             parsing:         { xAxisKey: "x", yAxisKey: "y" },
             tension:         0.3,
             pointRadius:     3,

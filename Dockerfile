@@ -7,11 +7,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /srv
 
-# ---- Basis systeemdeps (curl voor de healthcheck) ----
+# ---- Basis systeemdeps ----
+# tini = mini-init als PID 1: ruimt verweesde Chromium-processen (zombies)
+# op. Zonder tini stapelen die zich op tot Chromium niet meer kan starten.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     ca-certificates \
     curl \
+    tini \
  && rm -rf /var/lib/apt/lists/*
 
 # ---- Python deps ----
@@ -19,10 +22,12 @@ COPY requirements.txt /srv/requirements.txt
 RUN pip install --upgrade pip \
  && pip install -r /srv/requirements.txt
 
-# ---- Playwright browser + bijbehorende systeemdeps ----
-# --with-deps installeert precies de libraries die déze Playwright-versie
-# nodig heeft (vervangt de handmatige apt-lijst van vroeger)
-RUN python -m playwright install --with-deps chromium \
+# ---- Playwright: alleen de lichte chromium-headless-shell ----
+# --only-shell: geen volledige Chromium (scheelt ~150 MB en geheugen op de NAS)
+# --with-deps:  laat Playwright zelf de juiste systeemlibraries installeren
+#               (werkt vanaf Playwright ≥1.49 correct op Debian bookworm)
+RUN apt-get update \
+ && python -m playwright install --with-deps --only-shell chromium \
  && rm -rf /var/lib/apt/lists/*
 
 # ---- App-versie (door CI als build-arg meegegeven; lokaal 'dev') ----
@@ -42,4 +47,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
   CMD curl -fsS http://localhost:8080/health || exit 1
 
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

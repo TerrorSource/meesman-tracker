@@ -15,6 +15,9 @@
   {% if request.query_params.get('error') == 'no_key' %}
     <p class="err"><strong>Fout:</strong> Genereer eerst een master key.</p>
   {% endif %}
+  {% if request.query_params.get('error') == 'bad_time' %}
+    <p class="err"><strong>Fout:</strong> Ongeldige refresh-tijd — gebruik UU:MM (bijv. 07:30). Niets opgeslagen.</p>
+  {% endif %}
   {% if request.query_params.get('error') == 'bad_totp' %}
     <p class="err"><strong>Fout:</strong> Ongeldig TOTP-geheim (geen geldige base32-code).
       Er is <em>niets</em> opgeslagen — controleer het geheim en probeer opnieuw.</p>
@@ -101,19 +104,28 @@
     </div>
   </div>
 
-  <!-- ── Intervallen ── -->
+  <!-- ── Planning ── -->
   <div class="card">
-    <h3 style="margin:0 0 4px">Intervallen</h3>
+    <h3 style="margin:0 0 4px">Planning</h3>
     <div class="grid">
       <div>
-        <label>Refresh-interval (uren)</label>
-        <input name="refresh_hours" type="number" min="1" max="168" value="{{ cfg.refresh_hours or 24 }}" />
-        <small>Hoe vaak de saldi worden opgehaald. Standaard: 24 uur.</small>
+        <label>Dagelijkse refresh-tijd <small>(lokale tijd, leeg = intervalmodus)</small></label>
+        <input name="refresh_time" type="time" value="{{ cfg.refresh_time or '' }}" />
+        <small>Vaste kloktijd, bijv. 07:30 — Meesman werkt koersen één keer per werkdag bij.
+          Aanbevolen boven het interval: verschuift niet bij herstarts.</small>
       </div>
+      <div>
+        <label>Refresh-interval (uren) <small>(alleen als de tijd hierboven leeg is)</small></label>
+        <input name="refresh_hours" type="number" min="1" max="168" value="{{ cfg.refresh_hours or 24 }}" />
+        <small>Terugvaloptie: elke N uur sinds containerstart.</small>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:4px">
       <div>
         <label>Keepalive-interval (minuten)</label>
         <input name="keepalive_minutes" type="number" min="5" max="120" value="{{ cfg.keepalive_minutes or 30 }}" />
-        <small>Houdt de sessie actief zodat je minder vaak opnieuw hoeft in te loggen. Standaard: 30 min.</small>
+        <small>Alleen actief bij <em>handmatige MFA</em>; met TOTP logt de refresh zelf opnieuw in
+          en wordt de keepalive overgeslagen.</small>
       </div>
     </div>
   </div>

@@ -12,6 +12,9 @@ services:
     volumes:
       - ./data:/data
     restart: unless-stopped
+    # Mini-init als PID 1 (zombie-processen opruimen). Het image heeft tini
+    # al ingebouwd; dit is een extra vangnet.
+    init: true
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
       interval: 60s
