@@ -59,16 +59,23 @@
 <body>
   <div class="topbar">
     <strong>📊 Meesman Tracker</strong>
+    {% block nav %}
     <a href="/">Dashboard</a>
     <a href="/deposits">Inleg</a>
     <a href="/import">Importeer</a>
     <a href="/config">Config</a>
     <a href="/session">Status</a>
-    <div class="push">
+    <div class="push" style="display:flex; gap:8px; align-items:center">
       <form action="/refresh-now" method="post" style="display:inline">
         <button type="submit" class="primary">↻ Refresh nu</button>
       </form>
+      {% if request.state.auth_user %}
+      <form action="/logout" method="post" style="display:inline" title="Ingelogd als {{ request.state.auth_user }}">
+        <button type="submit">Uitloggen</button>
+      </form>
+      {% endif %}
     </div>
+    {% endblock %}
   </div>
   <div class="main">
     {% block content %}{% endblock %}

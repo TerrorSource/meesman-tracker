@@ -282,6 +282,7 @@ template:
 | `SELF_RESTART` | `1` | When Chromium cannot start (host problem), exit the process so Docker restarts the container cleanly. Set to `0` to disable |
 | `APP_USER` / `APP_PASSWORD` | unset | Basic Auth for the UI (see *Security*) |
 | `API_TOKEN` | unset | Bearer token for `/api/*`, `/export.json`, `/deposits.json` |
+| `SESSION_DAYS` | `30` | Lifetime of the login session cookie |
 | `MASTER_KEY` | unset | Fernet master key; overrides the one in `config.yaml` |
 | `PUID` / `PGID` | `1000` | uid/gid the app runs as; `/data` is chowned to it at start |
 | `API_CAPTURE` | `0` | Set to `1` to write every JSON response from `*.meesman.nl` during a refresh to `data/debug/api_capture.json` (debugging only) |
@@ -332,12 +333,12 @@ Since v10 the app can be locked down with environment variables — **without th
 
 | Variable | Purpose |
 |---|---|
-| `APP_USER` / `APP_PASSWORD` | HTTP Basic Auth for every page and form. Your browser asks once and remembers it. |
+| `APP_USER` / `APP_PASSWORD` | Login for the web UI. You get a normal login page (`/login`) that works with password managers; the session is a signed, HttpOnly cookie valid for `SESSION_DAYS` (default 30). HTTP Basic Auth with the same credentials is accepted too (scripts, curl). A **Uitloggen** button appears in the top bar. |
 | `API_TOKEN` | Token for the machine endpoints (`/api/*`, `/export.json`, `/deposits.json`), sent as `Authorization: Bearer <token>` or `X-API-Token: <token>`. Basic Auth is accepted there too, so Home Assistant can use either. |
 | `MASTER_KEY` | The Fernet key used to encrypt your Meesman password, TOTP secret and Telegram token. Copy the `master_key` value from `data/config.yaml` here; the key then no longer has to live next to the ciphertexts. |
 | `PUID` / `PGID` | The container runs as a non-root user (default uid/gid 1000). At start-up it takes ownership of `/data`, so a data directory created by an older (root) version keeps working. Use the uid/gid of your NAS user (`id` on the NAS) if you want the files to stay accessible from the host. |
 
-`/health` and `/static/` stay open (Docker healthcheck, CSS/JS). A wrong password is delayed by one second to slow down brute-force attempts. Every response carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`.
+`/health`, `/static/` and `/login` stay open (Docker healthcheck, CSS/JS, the login page). Sessions are invalidated automatically when you change `APP_PASSWORD` (the cookie signature is derived from it). A wrong password is delayed by one second to slow down brute-force attempts. Every response carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`.
 
 **Home Assistant with a token:**
 
@@ -368,7 +369,8 @@ sensor:
 meesman-tracker/
 ├── app/
 │   ├── main.py              # App bootstrap: lifespan, scheduler jobs, middleware, routers
-│   ├── auth.py              # Basic Auth (UI) + API token (machine endpoints)
+│   ├── auth.py              # Login sessions + Basic Auth (UI), API token (machine endpoints)
+│   ├── routes_auth.py       # /login, /logout
 │   ├── core.py              # Shared base: paths, engine, templates, formatting/parsing helpers
 │   ├── store.py             # Storage layer: snapshots, deposits, logs, JSON exports
 │   ├── service_refresh.py   # Refresh/keepalive orchestration, failure alerts

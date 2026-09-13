@@ -32,7 +32,7 @@ from .store import (
     restore_deposits_from_json,
     write_export_json,
 )
-from . import routes_api, routes_config, routes_dashboard, routes_deposits, routes_import
+from . import routes_api, routes_auth, routes_config, routes_dashboard, routes_deposits, routes_import
 
 
 @asynccontextmanager
@@ -158,6 +158,7 @@ async def security_middleware(request: Request, call_next):
     return response
 
 
+app.include_router(routes_auth.router)
 app.include_router(routes_dashboard.router)
 app.include_router(routes_api.router)
 app.include_router(routes_config.router)
