@@ -1,5 +1,5 @@
 fastapi==0.141.1
-uvicorn[standard]==0.52.4
+uvicorn[standard]==0.53.0
 jinja2==3.1.6
 python-multipart==0.0.32
 apscheduler==3.11.3
@@ -7,6 +7,6 @@ cryptography==50.0.1
 pydantic==2.13.5
 playwright==1.62.0
 PyYAML==6.0.3
-sqlalchemy==2.0.52
+sqlalchemy==2.0.54
 requests==2.34.2
 pyotp==2.10.0
