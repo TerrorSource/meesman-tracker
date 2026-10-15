@@ -2,28 +2,28 @@
 {% block content %}
 
 <div class="card">
-  <h2 style="margin:0 0 8px">Inleg bijhouden</h2>
+  <h2 style="margin:0 0 8px">Inleg &amp; opnames bijhouden</h2>
   <p style="margin:0; color:var(--muted)">
-    Registreer hier je cash stortingen per rekening. Dividend herbelegging hoef je
+    Registreer hier je stortingen én opnames per rekening. Dividend herbelegging hoef je
     <strong>niet</strong> in te voeren — dat zit al verwerkt in de waarde.
-    <br>Het dashboard berekent op basis van deze inleg het <strong>echte rendement</strong>
-    (waarde − inleg).
+    <br>Het dashboard berekent op basis van de <strong>netto inleg</strong> (stortingen − opnames)
+    het <strong>echte rendement</strong> (waarde − netto inleg).
   </p>
 </div>
 
 {% if request.query_params.get('saved') == '1' %}
   <div class="card" style="padding:10px 16px">
-    <span class="ok">✓ Inleg opgeslagen</span>
+    <span class="ok">✓ Opgeslagen</span>
   </div>
 {% endif %}
 {% if request.query_params.get('deleted') == '1' %}
   <div class="card" style="padding:10px 16px">
-    <span class="ok">✓ Inleg verwijderd</span>
+    <span class="ok">✓ Verwijderd</span>
   </div>
 {% endif %}
 {% if request.query_params.get('updated') == '1' %}
   <div class="card" style="padding:10px 16px">
-    <span class="ok">✓ Inleg bijgewerkt</span>
+    <span class="ok">✓ Bijgewerkt</span>
   </div>
 {% endif %}
 {% if error is defined %}
@@ -34,10 +34,21 @@
 
 <!-- ── Invoerformulier (toevoegen én bewerken) ── -->
 <div class="card">
-  <h3 style="margin:0 0 12px" id="form-title">Inleg toevoegen</h3>
+  <h3 style="margin:0 0 12px" id="form-title">Inleg of opname toevoegen</h3>
   <form method="post" action="/deposits/add" id="deposit-form">
     <input type="hidden" name="account_number" id="acc-final" value="" />
     <input type="hidden" name="entry_time" id="entry-time" value="00:00" />
+
+    <div style="display:flex; gap:20px; flex-wrap:wrap; margin-bottom:4px">
+      <label style="margin:0; font-weight:normal; display:flex; gap:6px; align-items:center; cursor:pointer">
+        <input type="radio" name="kind" value="deposit" id="kind-deposit" checked style="width:auto" />
+        ➕ Inleg <small>(storting op je rekening)</small>
+      </label>
+      <label style="margin:0; font-weight:normal; display:flex; gap:6px; align-items:center; cursor:pointer">
+        <input type="radio" name="kind" value="withdrawal" id="kind-withdrawal" style="width:auto" />
+        ➖ Opname <small>(geld naar je bankrekening)</small>
+      </label>
+    </div>
 
     <div class="grid">
       <div>
@@ -57,18 +68,18 @@
 
     <div class="grid" style="margin-top:4px">
       <div>
-        <label>Bedrag inleg (€) <small>— gebruik komma: bijv. 4987,50</small></label>
+        <label><span id="amount-label">Bedrag inleg</span> (€) <small>— altijd positief, gebruik komma: bijv. 4987,50</small></label>
         <input name="amount_eur" type="text" required placeholder="bijv. 4987,50"
                inputmode="decimal" autocomplete="off" id="amount-inp" />
       </div>
       <div>
         <label>Omschrijving <small>(optioneel)</small></label>
-        <input name="note" type="text" placeholder="bijv. Maandelijkse inleg" autocomplete="off" id="note-inp" />
+        <input name="note" type="text" placeholder="bijv. Maandelijkse inleg / Opname voor verbouwing" autocomplete="off" id="note-inp" />
       </div>
     </div>
 
     <div style="margin-top:14px; display:flex; gap:8px">
-      <button type="submit" class="primary" id="form-submit">➕ Inleg toevoegen</button>
+      <button type="submit" class="primary" id="form-submit">➕ Toevoegen</button>
       <button type="button" id="form-cancel" style="display:none">✕ Annuleer bewerken</button>
     </div>
   </form>
@@ -77,7 +88,7 @@
 <!-- ── Overzicht ── -->
 {% if deposits %}
 <div class="card">
-  <h3 style="margin:0 0 12px">Alle inleggen</h3>
+  <h3 style="margin:0 0 12px">Alle inleggen en opnames</h3>
 
   {% set ns = namespace(prev_acc='', acc_total=0) %}
   <table>
@@ -85,6 +96,7 @@
       <tr>
         <th>Datum</th>
         <th>Rekening</th>
+        <th>Soort</th>
         <th style="text-align:right">Bedrag</th>
         <th>Omschrijving</th>
         <th></th>
@@ -95,8 +107,10 @@
       <tr>
         <td style="color:var(--muted)">{{ d.ts | local_date }}</td>
         <td>{{ d.label }} <small style="color:var(--muted2)">({{ d.account_number }})</small></td>
-        <td style="text-align:right; font-weight:600">
-          € {{ "{:,.2f}".format(d.amount_eur|float).replace(",", "X").replace(".", ",").replace("X", ".") }}
+        {% set amt = d.amount_eur|float %}
+        <td>{% if amt < 0 %}<span class="err">➖ Opname</span>{% else %}<span class="ok">➕ Inleg</span>{% endif %}</td>
+        <td style="text-align:right; font-weight:600" class="{{ 'err' if amt < 0 else '' }}">
+          {{ '−' if amt < 0 else '' }}€ {{ "{:,.2f}".format(amt|abs).replace(",", "X").replace(".", ",").replace("X", ".") }}
         </td>
         <td style="color:var(--muted)">{{ d.note or '' }}</td>
         <td style="white-space:nowrap">
@@ -105,12 +119,13 @@
                   data-account="{{ d.account_number }}"
                   data-date="{{ d.ts[:10] }}"
                   data-time="{{ d.ts[11:16] or '00:00' }}"
-                  data-amount="{{ '%.2f'|format(d.amount_eur|float) }}"
+                  data-amount="{{ '%.2f'|format(d.amount_eur|float|abs) }}"
+                  data-kind="{{ 'withdrawal' if d.amount_eur|float < 0 else 'deposit' }}"
                   data-note="{{ d.note or '' }}"
                   style="background:none; border:none; cursor:pointer;
                          color:var(--accent); padding:2px 6px; font-size:13px">✎</button>
           <form method="post" action="/deposits/delete/{{ d.id }}" style="display:inline"
-                onsubmit="return confirm('Inleg verwijderen?')">
+                onsubmit="return confirm('Deze regel verwijderen?')">
             <button type="submit" title="Verwijderen" style="background:none; border:none; cursor:pointer;
                     color:var(--err); padding:2px 6px; font-size:13px">✕</button>
           </form>
@@ -122,7 +137,7 @@
 
   <!-- Totalen per rekening -->
   <div style="margin-top:16px; border-top:1px solid var(--border); padding-top:12px">
-    <strong>Totaal per rekening:</strong>
+    <strong>Netto inleg per rekening</strong> <small>(stortingen − opnames)</small>:
     {% set totals = {} %}
     {% for d in deposits %}
       {% if d.account_number in totals %}
@@ -135,7 +150,7 @@
       {% for acc, total in totals.items() %}
       <tr>
         <td style="padding-right:16px">{{ acc }}</td>
-        <td style="font-weight:600; text-align:right">€ {{ "{:,.2f}".format(total).replace(",", "X").replace(".", ",").replace("X", ".") }}</td>
+        <td style="font-weight:600; text-align:right" class="{{ 'err' if total < 0 else '' }}">{{ '−' if total < 0 else '' }}€ {{ "{:,.2f}".format(total|abs).replace(",", "X").replace(".", ",").replace("X", ".") }}</td>
       </tr>
       {% endfor %}
     </table>
@@ -143,7 +158,7 @@
 </div>
 {% else %}
 <div class="card" style="color:var(--muted2)">
-  Nog geen inleggen geregistreerd.
+  Nog geen inleggen of opnames geregistreerd.
 </div>
 {% endif %}
 
@@ -160,6 +175,19 @@ const dateInp   = document.getElementById("entry-date");
 const timeInp   = document.getElementById("entry-time");
 const amountInp = document.getElementById("amount-inp");
 const noteInp   = document.getElementById("note-inp");
+const kindDep   = document.getElementById("kind-deposit");
+const kindWd    = document.getElementById("kind-withdrawal");
+const amountLbl = document.getElementById("amount-label");
+
+function syncKind() {
+  const wd = kindWd.checked;
+  amountLbl.textContent = wd ? "Bedrag opname" : "Bedrag inleg";
+  if (form.action.endsWith("/deposits/add")) {
+    submitBtn.textContent = wd ? "➖ Opname toevoegen" : "➕ Inleg toevoegen";
+  }
+}
+kindDep.addEventListener("change", syncKind);
+kindWd.addEventListener("change", syncKind);
 
 fetch("/api/accounts")
   .then(r => r.json())
@@ -193,12 +221,13 @@ function syncFinal() {
 
 function resetForm() {
   form.action = "/deposits/add";
-  formTitle.textContent = "Inleg toevoegen";
-  submitBtn.textContent = "➕ Inleg toevoegen";
+  formTitle.textContent = "Inleg of opname toevoegen";
   cancelBtn.style.display = "none";
   timeInp.value = "00:00";
   amountInp.value = "";
   noteInp.value = "";
+  kindDep.checked = true;
+  syncKind();
   setDefaultDate();
 }
 
@@ -213,9 +242,11 @@ document.querySelectorAll(".edit-dep").forEach(btn => {
   btn.addEventListener("click", () => {
     const d = btn.dataset;
     form.action = "/deposits/update/" + d.id;
-    formTitle.textContent = "Inleg bewerken";
+    formTitle.textContent = d.kind === "withdrawal" ? "Opname bewerken" : "Inleg bewerken";
     submitBtn.textContent = "💾 Wijzigingen opslaan";
     cancelBtn.style.display = "";
+    (d.kind === "withdrawal" ? kindWd : kindDep).checked = true;
+    syncKind();
 
     const opt = [...sel.options].find(o => o.value === d.account);
     if (opt) {
@@ -237,6 +268,7 @@ document.querySelectorAll(".edit-dep").forEach(btn => {
 cancelBtn.addEventListener("click", resetForm);
 
 setDefaultDate();
+syncKind();
 </script>
 
 {% endblock %}

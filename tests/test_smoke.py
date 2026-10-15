@@ -276,3 +276,43 @@ def test_meesman_messages_sync_first_seed_then_new(client):
     assert recent[0]["title"] == "Nieuwe voorwaarden" and len(recent) == 3
     html = client.get("/session").text
     assert "Meesman-berichten" in html and "Nieuwe voorwaarden" in html and "10-09-2026" in html
+
+
+def test_withdrawal_add_edit_and_totals(client):
+    # opname: positief invoeren, negatief opgeslagen
+    r = client.post("/deposits/add", data={"account_number": "22404586", "entry_date": "2026-02-01",
+                                           "amount_eur": "250,00", "note": "verbouwing", "kind": "withdrawal"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    deps = client.get("/deposits.json").json()["deposits"]
+    wd = [d for d in deps if d["note"] == "verbouwing"][0]
+    assert wd["amount_eur"] == -250.0
+
+    html = client.get("/deposits").text
+    assert "➖ Opname" in html and 'data-kind="withdrawal"' in html and "−€ 250,00" in html
+
+    # een ingevoerd minteken bij 'inleg' wordt genegeerd (abs) — het type bepaalt het teken
+    r = client.post("/deposits/add", data={"account_number": "22404586", "entry_date": "2026-02-02",
+                                           "amount_eur": "-100,00", "note": "plus", "kind": "deposit"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert [d for d in client.get("/deposits.json").json()["deposits"] if d["note"] == "plus"][0]["amount_eur"] == 100.0
+
+    # 0 wordt geweigerd
+    r = client.post("/deposits/add", data={"account_number": "22404586", "entry_date": "2026-02-02",
+                                           "amount_eur": "0,00", "kind": "deposit"})
+    assert r.status_code == 200 and "mag niet 0" in r.text
+
+    # bewerken: opname → inleg
+    import re as _re
+    dep_id = _re.search(r'data-id="(\d+)"[^>]*data-kind="withdrawal"', client.get("/deposits").text).group(1)
+    r = client.post(f"/deposits/update/{dep_id}", data={"account_number": "22404586", "entry_date": "2026-02-01",
+                                                        "amount_eur": "250,00", "note": "verbouwing", "kind": "deposit"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert [d for d in client.get("/deposits.json").json()["deposits"] if d["note"] == "verbouwing"][0]["amount_eur"] == 250.0
+
+    # opruimen (andere tests rekenen op een lege inleg-tabel voor rendement)
+    for d_id in _re.findall(r'data-id="(\d+)"', client.get("/deposits").text):
+        client.post(f"/deposits/delete/{d_id}", follow_redirects=False)
+    assert client.get("/deposits.json").json()["deposits"] == []

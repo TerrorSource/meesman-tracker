@@ -1,4 +1,8 @@
-"""Routes: inleg (deposits) — toevoegen, bewerken, verwijderen."""
+"""Routes: inleg en opnames (deposits) — toevoegen, bewerken, verwijderen.
+
+Een opname wordt opgeslagen als negatief bedrag in dezelfde tabel; het
+netto-totaal (inleg − opnames) is de basis voor het echte rendement.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -20,8 +24,9 @@ def _error_page(request: Request, message: str):
 
 
 def _parse_deposit_form(request: Request, account_number: str, entry_date: str,
-                        entry_time: str, amount_eur: str):
-    """Valideer gedeelde formuliervelden. Returnt (acc, ts, amount) of een error-response."""
+                        entry_time: str, amount_eur: str, kind: str = "deposit"):
+    """Valideer gedeelde formuliervelden. Returnt (acc, ts, amount) of een
+    error-response. `kind` = 'deposit' (positief) of 'withdrawal' (negatief)."""
     acc_number = account_number.strip()
     if not acc_number:
         return _error_page(request, "Rekeningnummer is verplicht.")
@@ -33,9 +38,13 @@ def _parse_deposit_form(request: Request, account_number: str, entry_date: str,
         return _error_page(request, "Ongeldige datum of tijd.")
 
     try:
-        amount_float = parse_form_amount(amount_eur)
+        amount_float = abs(parse_form_amount(amount_eur))
     except (ValueError, AttributeError):
         return _error_page(request, f"Ongeldig bedrag '{amount_eur}'. Gebruik komma: bijv. 4987,50")
+    if amount_float == 0:
+        return _error_page(request, "Het bedrag mag niet 0 zijn.")
+    if kind == "withdrawal":
+        amount_float = -amount_float
 
     return acc_number, ts, amount_float
 
@@ -63,8 +72,9 @@ async def deposits_add(
     entry_time:     str   = Form("00:00"),
     amount_eur:     str   = Form(...),
     note:           str   = Form(""),
+    kind:           str   = Form("deposit"),
 ):
-    parsed = _parse_deposit_form(request, account_number, entry_date, entry_time, amount_eur)
+    parsed = _parse_deposit_form(request, account_number, entry_date, entry_time, amount_eur, kind)
     if not isinstance(parsed, tuple):
         return parsed
     acc_number, ts, amount_float = parsed
@@ -76,7 +86,7 @@ async def deposits_add(
             VALUES (:ts, :n, :l, :v, :note)
         """), {"ts": ts, "n": acc_number, "l": label, "v": amount_float, "note": note.strip() or None})
 
-    logger.info("Inleg toegevoegd: %s %s € %.2f", acc_number, ts, amount_float)
+    logger.info("%s toegevoegd: %s %s € %.2f", "Opname" if amount_float < 0 else "Inleg", acc_number, ts, amount_float)
     try:
         write_deposits_json()
     except Exception as e:
@@ -93,8 +103,9 @@ async def deposits_update(
     entry_time:     str   = Form("00:00"),
     amount_eur:     str   = Form(...),
     note:           str   = Form(""),
+    kind:           str   = Form("deposit"),
 ):
-    parsed = _parse_deposit_form(request, account_number, entry_date, entry_time, amount_eur)
+    parsed = _parse_deposit_form(request, account_number, entry_date, entry_time, amount_eur, kind)
     if not isinstance(parsed, tuple):
         return parsed
     acc_number, ts, amount_float = parsed

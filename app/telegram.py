@@ -193,7 +193,7 @@ def build_period_summary(start: datetime, end: datetime, title: str,
              f"💰 Totaal:       {fmt_eur(total_end)}",
              f"   Begin:        {fmt_eur(total_begin)}"]
     if abs(dep) >= 0.01:
-        lines.append(f"   Inleg:        {fmt_eur_delta(dep)}")
+        lines.append(f"   Netto inleg:  {fmt_eur_delta(dep)}")
     lines.append(f"   Rendement:    {fmt_eur_delta(rend)} ({fmt_pct(pct)})")
     lines.append("")
 

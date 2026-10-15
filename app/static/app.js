@@ -128,7 +128,7 @@
 
       if (totalDeposits > 0) {
         const color = trueRendement >= 0 ? C.ok : C.err;
-        html += `<br><small style="color:${C.muted}">Totale inleg: ${fmtEur(totalDeposits)} &nbsp;—&nbsp; `;
+        html += `<br><small style="color:${C.muted}">Netto inleg: ${fmtEur(totalDeposits)} &nbsp;—&nbsp; `;
         html += `Echt rendement: <strong style="color:${color}">${fmtEurDelta(trueRendement)}`;
         if (truePct !== null) html += ` (${fmtPct(truePct)})`;
         html += `</strong></small>`;
@@ -170,7 +170,7 @@
       if (trueRendement !== null && totalDeposits !== null) {
         const color = trueRendement >= 0 ? C.ok : C.err;
         rendBadge = `<div style="font-size:0.8em; color:${C.muted}; margin-top:2px">
-          Inleg: ${fmtEur(totalDeposits)} &nbsp;|&nbsp;
+          Netto inleg: ${fmtEur(totalDeposits)} &nbsp;|&nbsp;
           Echt rendement: <strong style="color:${color}">${fmtEurDelta(trueRendement)}${trueRendPct !== null ? ` (${fmtPct(trueRendPct)})` : ""}</strong>
         </div>`;
       }

@@ -15,7 +15,7 @@ A self-hosted Docker application that automatically logs into [mijn.meesman.nl](
 - **Session keepalive** for manual-MFA mode (HTTP cookie check, full browser only every Nth tick); skipped entirely in TOTP mode
 - **Dashboard** with charts (1m / 3m / 1y / all), balance history, return per account, a configurable growth baseline date and a **return-per-calendar-year** table; individual data points can be deleted from the changes table; dark mode follows your system setting
 - **Account archiving** — closed accounts disappear from the dashboard, totals, API and notifications while their history is kept; you get a Telegram notice when a known account no longer appears at Meesman
-- **Deposit tracking** — add, edit and delete deposits; distinguish your own deposits from actual investment returns
+- **Deposit & withdrawal tracking** — add, edit and delete deposits and withdrawals; the net amount (deposits − withdrawals) separates your own money from actual investment returns
 - **Home Assistant REST API** — `/api/sensors` and `/deposits.json`
 - **CSV export** — `/export.csv` and `/deposits.csv` (Dutch Excel format)
 - **Telegram notifications** on balance change (with optional € / % thresholds), session expiry, repeated refresh failures (with the debug screenshot attached, incl. recovery), browser failures, missing accounts, new messages in your Meesman inbox, and monthly/weekly summaries
