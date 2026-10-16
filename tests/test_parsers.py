@@ -124,3 +124,11 @@ def test_messages_notification_text():
     two = build_messages_notification([{"id": 1, "title": "A", "created_at": "", "important": True},
                                        {"id": 2, "title": "B", "created_at": "2026-01-30T14:14:14", "important": False}])
     assert "2 nieuwe berichten" in two and "• A ❗" in two and "• B (30-01-2026)" in two
+
+
+def test_maintenance_page_detection():
+    from app.scraper import is_maintenance_page
+    assert is_maintenance_page("<title>Tijdelijk niet bereikbaar vanwege onderhoud | Meesman</title>") is True
+    assert is_maintenance_page("<h1>We zijn even bezig...</h1>") is True
+    assert is_maintenance_page("<title>Login | Meesman indexbeleggen</title><input id='login-username'>") is False
+    assert is_maintenance_page("") is False

@@ -316,3 +316,48 @@ def test_withdrawal_add_edit_and_totals(client):
     for d_id in _re.findall(r'data-id="(\d+)"', client.get("/deposits").text):
         client.post(f"/deposits/delete/{d_id}", follow_redirects=False)
     assert client.get("/deposits.json").json()["deposits"] == []
+
+
+def test_maintenance_status_does_not_count_as_failure(client):
+    from app.store import compute_health, consecutive_failed_refreshes, write_refresh_log
+    before = consecutive_failed_refreshes()
+    write_refresh_log("maintenance", 0, "Meesman is in onderhoud (onderhoudspagina) — later opnieuw", 2.1)
+    assert consecutive_failed_refreshes() == before          # telt niet mee voor de alert
+    assert compute_health()["last_refresh_status"] == "maintenance"
+    html = client.get("/session").text
+    assert "🛠 onderhoud" in html
+    assert "Meesman in onderhoud" in client.get("/").text
+    write_refresh_log("ok", 0, None, 5.0)                     # herstel voor andere tests
+
+
+def test_wait_detects_maintenance_fast():
+    """Onderhoudspagina → MeesmanMaintenance binnen ~1 s, niet pas na de timeout."""
+    import time
+    from app.scraper import MeesmanMaintenance, wait_for_selector_or_maintenance
+    from playwright.async_api import async_playwright
+
+    fixture = FIXTURE.parent / "meesman_maintenance.html"
+
+    async def run():
+        async with async_playwright() as p:
+            try:
+                browser = await p.chromium.launch(headless=True)
+            except Exception as e:
+                pytest.skip(f"Chromium niet beschikbaar: {str(e)[:80]}")
+            page = await browser.new_page()
+            await page.goto(fixture.resolve().as_uri())
+            t0 = time.monotonic()
+            try:
+                await wait_for_selector_or_maintenance(page, "#login-username, table.meesman-table tr", 45_000)
+                raised = False
+            except MeesmanMaintenance:
+                raised = True
+            elapsed = time.monotonic() - t0
+            # en de normale fixture levert gewoon 'gevonden' op (geen exception)
+            await page.goto(FIXTURE.resolve().as_uri())
+            await wait_for_selector_or_maintenance(page, "table.meesman-table tbody tr.grid-row", 10_000)
+            await browser.close()
+            return raised, elapsed
+
+    raised, elapsed = asyncio.run(run())
+    assert raised is True and elapsed < 10

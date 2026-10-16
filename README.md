@@ -11,7 +11,7 @@ A self-hosted Docker application that automatically logs into [mijn.meesman.nl](
 - **Automatic balance scraping** via Playwright (chromium-headless-shell)
 - **TOTP support** — fully unattended, no manual MFA codes needed
 - **Scheduled refresh at a fixed local time** (default 07:30, optionally Mon–Sat or Mon–Fri) with catch-up after a (re)start and two automatic retries (30 and 90 min) after a failed scrape; interval mode as fallback
-- **Self-healing** — retries with a fresh browser context when a stale session blocks the login; restarts the container when Chromium itself can no longer start
+- **Self-healing** — retries with a fresh browser context when a stale session blocks the login; restarts the container when Chromium itself can no longer start; recognises Meesman's maintenance page ("We zijn even bezig…") and simply retries later without touching the session or raising an alert
 - **Session keepalive** for manual-MFA mode (HTTP cookie check, full browser only every Nth tick); skipped entirely in TOTP mode
 - **Dashboard** with charts (1m / 3m / 1y / all), balance history, return per account, a configurable growth baseline date and a **return-per-calendar-year** table; individual data points can be deleted from the changes table; dark mode follows your system setting
 - **Account archiving** — closed accounts disappear from the dashboard, totals, API and notifications while their history is kept; you get a Telegram notice when a known account no longer appears at Meesman

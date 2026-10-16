@@ -43,7 +43,7 @@
           {% for r in refresh_rows %}
           <tr>
             <td style="white-space:nowrap">{{ r.ts | local }}</td>
-            <td class="{{ 'ok' if r.status == 'ok' else ('muted' if r.status == 'skipped' else 'err') }}">{{ r.status }}</td>
+            <td class="{{ 'ok' if r.status == 'ok' else ('muted' if r.status in ('skipped', 'maintenance') else 'err') }}">{{ '🛠 onderhoud' if r.status == 'maintenance' else r.status }}</td>
             <td class="num">{% if r.duration_s %}{{ r.duration_s }} s{% else %}—{% endif %}</td>
             <td class="num">{{ r.stored_rows }}</td>
             <td style="word-break:break-word" title="{{ r.message or '' }}">{{ (r.message or '') | truncate(120) }}</td>
@@ -188,7 +188,7 @@
           {% for r in keepalive_rows %}
           <tr>
             <td>{{ r.ts | local }}</td>
-            <td class="{{ 'ok' if r.status in ('ok', 'recovered') else 'err' }}">{{ r.status }}</td>
+            <td class="{{ 'ok' if r.status in ('ok', 'recovered') else ('muted' if r.status == 'skipped' else 'err') }}">{{ r.status }}</td>
             <td>{{ r.message or '' }}</td>
           </tr>
           {% endfor %}

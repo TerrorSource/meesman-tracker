@@ -24,6 +24,7 @@ from .core import (
 )
 from .scheduler import scheduler
 from .scraper import (
+    MeesmanMaintenance,
     fetch_accounts,
     http_session_check,
     is_browser_launch_failure,
@@ -335,6 +336,15 @@ async def _do_refresh() -> tuple[bool, str]:
 
         return True, "ok"
 
+    except MeesmanMaintenance:
+        duration = round(time.monotonic() - t0, 1)
+        msg = "Meesman is in onderhoud (onderhoudspagina) — later opnieuw"
+        logger.warning("Refresh: %s", msg)
+        # status 'maintenance': telt niet mee voor de storingsalert, sessie
+        # blijft bewaard; de herkansingen (30/90 min) vangen het op
+        write_refresh_log("maintenance", 0, msg, duration)
+        return False, "scrape"
+
     except Exception as e:
         duration = round(time.monotonic() - t0, 1)
         msg = f"Onverwachte fout: {type(e).__name__}: {e}"
@@ -394,6 +404,10 @@ async def keepalive_tick() -> None:
                 storage_state_path=str(SESSION_STATE_PATH),
                 dump_cookies_path=str(COOKIES_DUMP_PATH),
             )
+    except MeesmanMaintenance:
+        logger.info("Keepalive: Meesman in onderhoud — overgeslagen.")
+        write_keepalive_log("skipped", "Meesman in onderhoud")
+        return
     except Exception as e:
         logger.warning("Keepalive: onverwachte fout: %s", e)
         if is_browser_launch_failure(e):

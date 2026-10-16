@@ -46,6 +46,44 @@ def _is_redirect_stub(body: str) -> bool:
     return len(body) < 2000 and _STUB_MARKER in body
 
 
+# Meesman-onderhoudspagina ("We zijn even bezig..."), gezien op 16-10-2026
+_MAINTENANCE_MARKERS = (
+    "Tijdelijk niet bereikbaar vanwege onderhoud",
+    "We zijn even bezig",
+    "tijdelijk niet beschikbaar",
+)
+
+
+class MeesmanMaintenance(Exception):
+    """Meesman toont de onderhoudspagina — later opnieuw proberen, geen
+    sessie-reset, geen storingsalert."""
+
+
+def is_maintenance_page(html: str) -> bool:
+    h = (html or "")[:200_000]
+    return any(m in h for m in _MAINTENANCE_MARKERS)
+
+
+# JS-expressie voor wait_for_function: klaar zodra de gewenste selector er is
+# ÓF de onderhoudspagina getoond wordt (dan hoeven we geen 45 s te wachten)
+_WAIT_JS = """(args) => {
+  const [sel, markers] = args;
+  try { if (sel && document.querySelector(sel)) return 'found'; } catch (e) {}
+  const t = (document.title || '') + ' ' + ((document.body && document.body.innerText) || '').slice(0, 5000);
+  return markers.some(m => t.includes(m)) ? 'maintenance' : false;
+}"""
+
+
+async def wait_for_selector_or_maintenance(page, selector: str, timeout_ms: int) -> None:
+    """Wacht op `selector`; raise MeesmanMaintenance als intussen de
+    onderhoudspagina verschijnt (snel, in plaats van de volle timeout)."""
+    handle = await page.wait_for_function(_WAIT_JS, arg=[selector, list(_MAINTENANCE_MARKERS)],
+                                          timeout=timeout_ms, polling=500)
+    result = await handle.json_value()
+    if result == "maintenance":
+        raise MeesmanMaintenance("Meesman is in onderhoud (onderhoudspagina getoond)")
+
+
 def parse_messages_payload(body: str) -> list[dict]:
     """
     Parse de response van umbraco/Surface/Messages/List (de Meesman-inbox).
@@ -372,7 +410,12 @@ async def fetch_accounts(
 
         await page.goto(login_url, wait_until="domcontentloaded")
         try:
-            await page.wait_for_selector(combined_selector, timeout=45_000)
+            await wait_for_selector_or_maintenance(page, combined_selector, 45_000)
+        except MeesmanMaintenance:
+            await dump(page, "step0_maintenance")
+            await ctx.close()
+            await browser.close()
+            raise
         except Exception:
             await dump(page, "step0_login_timeout")
             if not ctx_kwargs:
@@ -397,7 +440,12 @@ async def fetch_accounts(
             page.on("response", _capture_response)
             await page.goto(login_url, wait_until="domcontentloaded")
             try:
-                await page.wait_for_selector(combined_selector, timeout=45_000)
+                await wait_for_selector_or_maintenance(page, combined_selector, 45_000)
+            except MeesmanMaintenance:
+                await dump(page, "step0_maintenance")
+                await ctx.close()
+                await browser.close()
+                raise
             except Exception:
                 await dump(page, "step0_login_timeout_retry")
                 raise
@@ -441,7 +489,12 @@ async def fetch_accounts(
         # Wacht op de rekeningtabel i.p.v. een vaste pauze: via de nieuwe
         # OAuth-redirectketen kan het overzicht op NAS-hardware even duren.
         try:
-            await page.wait_for_selector(cfg["accounts_row_selector"], timeout=45_000)
+            await wait_for_selector_or_maintenance(page, cfg["accounts_row_selector"], 45_000)
+        except MeesmanMaintenance:
+            await dump(page, "step3_maintenance")
+            await ctx.close()
+            await browser.close()
+            raise
         except Exception:
             pass  # de parser probeert het alsnog en we dumpen bij falen
         await dump(page, "step3_home")
@@ -512,7 +565,9 @@ async def keepalive_session(
         # en gaf valse "sessie verlopen"-meldingen met onnodige re-logins.
         wait_for = f"{selector}, {login_selector}" if login_selector else selector
         try:
-            await page.wait_for_selector(wait_for, timeout=45_000)
+            await wait_for_selector_or_maintenance(page, wait_for, 45_000)
+        except MeesmanMaintenance:
+            raise   # caller: geen 'sessie verlopen', geen re-login
         except Exception:
             pass
 
@@ -610,6 +665,8 @@ def http_session_check(storage_state_path: str) -> Optional[bool]:
         # terug — dat is dus "niet ingelogd", geen succes.
         if _is_redirect_stub(r.text or ""):
             return False
+        if is_maintenance_page(r.text or ""):
+            return None   # onderhoud: niets te concluderen over de sessie
         if r.status_code == 200 and "mijn.meesman.nl" in final_url:
             return True
         return None

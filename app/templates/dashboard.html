@@ -8,12 +8,12 @@
     <p style="margin:0">
       <strong>Laatste refresh:</strong> {{ last_refresh.ts | local }}&nbsp;—&nbsp;
       <strong>Status:</strong>
-      <span class="{{ 'ok' if last_refresh.status == 'ok' else 'err' }}">{{ last_refresh.status }}</span>
+      <span class="{{ 'ok' if last_refresh.status == 'ok' else ('muted' if last_refresh.status in ('skipped', 'maintenance') else 'err') }}">{{ '🛠 Meesman in onderhoud' if last_refresh.status == 'maintenance' else last_refresh.status }}</span>
       &nbsp;—&nbsp;<strong>Opgeslagen:</strong> {{ last_refresh.stored_rows }} rij(en)
       &nbsp;<small><a href="/session">geschiedenis →</a></small>
     </p>
     {% if last_refresh.message %}
-      <p class="err" style="margin:6px 0 0; word-break:break-word" title="{{ last_refresh.message }}">
+      <p class="{{ 'muted' if last_refresh.status == 'maintenance' else 'err' }}" style="margin:6px 0 0; word-break:break-word" title="{{ last_refresh.message }}">
         <strong>Reden:</strong> {{ last_refresh.message | truncate(300) }}
       </p>
     {% endif %}
