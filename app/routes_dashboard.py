@@ -23,6 +23,7 @@ from .store import (
     archived_accounts,
     compute_health,
     get_deposits,
+    load_deposits,
     read_cookie_dump_summary,
     recent_meesman_messages,
     recent_refresh_log,
@@ -109,7 +110,12 @@ def dashboard(request: Request, archived: int = 0):
         a["true_rendement"]  = (a["current"] - total_dep) if (a["current"] is not None and total_dep is not None) else None
         a["true_rendement_pct"] = ((a["true_rendement"] / total_dep) * 100) if (a["true_rendement"] is not None and total_dep) else None
 
-    payload = {"accounts": accounts_payload}
+    # Stortingen/opnames (oplopend in tijd) voor de netto-inleg-lijn in de totaalgrafiek
+    deposit_events = [
+        {"x": d["ts"], "amount": to_float(d["amount_eur"]), "account": d["account_number"]}
+        for d in reversed(load_deposits())
+    ]
+    payload = {"accounts": accounts_payload, "deposits": deposit_events}
 
     return templates.TemplateResponse(request, "dashboard.html", {
         # '</' escapen zodat een label nooit uit het <script>-blok kan breken

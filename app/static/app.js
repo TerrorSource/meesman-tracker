@@ -138,6 +138,76 @@
       totalCard.style.display = "";
     }
 
+    // ── Totaalgrafiek: hele vermogen + netto inleg als tweede lijn ──────────
+    const activeNums = new Set(active.map((a) => a.account_number));
+    const deps = (payload.deposits || []).filter((d) => activeNums.has(d.account));
+    if (active.length > 1 || (active.length === 1 && deps.length)) {
+      const series = totalSeries(active);
+      if (series.length) {
+        const depLine = depositSeries(deps, series[0].x, series[series.length - 1].x);
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:10px">
+            <strong style="font-size:1.05em">Totaal vermogen</strong>
+            ${depLine.length ? `<small style="color:${C.muted2}">lijn: waarde &nbsp;·&nbsp; stippellijn: netto inleg &nbsp;·&nbsp; het verschil is je rendement</small>` : ""}
+          </div>`;
+        const canvas = document.createElement("canvas");
+        canvas.height = 110;
+        card.appendChild(canvas);
+        root.appendChild(card);
+
+        const datasets = [{
+          label:           "Totaal vermogen",
+          data:            chartPoints(series),
+          parsing:         { xAxisKey: "x", yAxisKey: "y" },
+          tension:         0.3,
+          pointRadius:     2,
+          borderColor:     C.accent,
+          backgroundColor: C.fill,
+          fill:            true,
+        }];
+        if (depLine.length) {
+          datasets.push({
+            label:       "Netto inleg",
+            data:        chartPoints(depLine),
+            parsing:     { xAxisKey: "x", yAxisKey: "y" },
+            tension:     0,
+            pointRadius: 0,
+            borderColor: C.muted2,
+            borderDash:  [6, 4],
+            borderWidth: 2,
+            fill:        false,
+          });
+        }
+        charts.push(new Chart(canvas.getContext("2d"), {
+          type: "line",
+          data: { datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            interaction: { mode: "nearest", intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: { callbacks: { label: (ctx) => ` ${ctx.dataset.label}: ${fmtEur(ctx.parsed.y)}` } },
+            },
+            scales: {
+              x: {
+                type: "time",
+                time: { tooltipFormat: "dd-MM-yyyy HH:mm" },
+                ticks: { maxTicksLimit: 6, color: C.muted2 },
+                grid:  { color: C.grid },
+              },
+              y: {
+                ticks: { callback: (v) => fmtEur(v), maxTicksLimit: 5, color: C.muted2 },
+                grid:  { color: C.grid },
+              },
+            },
+          },
+        }));
+      }
+    }
+
     // ── Per-rekening kaarten ────────────────────────────────────────────────
     payload.accounts.forEach((acc) => {
       const card = document.createElement("div");
@@ -313,6 +383,46 @@
   render();
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+  // Som van alle rekeningen op elk meetmoment (laatst bekende waarde per rekening).
+  function totalSeries(accs) {
+    const events = [];
+    accs.forEach((a, i) => (a.points || []).forEach((p) => events.push({ t: Date.parse(p.x), i, y: p.y })));
+    events.sort((a, b) => a.t - b.t);
+    const last = {};
+    const out = [];
+    for (const e of events) {
+      last[e.i] = e.y;
+      const sum = Object.values(last).reduce((s, v) => s + v, 0);
+      const x = new Date(e.t).toISOString();
+      if (out.length && out[out.length - 1].x === x) out[out.length - 1].y = sum;
+      else out.push({ x, y: sum });
+    }
+    return out;
+  }
+
+  // Cumulatieve netto inleg als trapjeslijn (twee punten per storting/opname),
+  // van het eerste tot het laatste meetmoment. Inleg van vóór de eerste meting
+  // telt mee in het beginniveau.
+  function depositSeries(deps, firstX, lastX) {
+    if (!deps.length) return [];
+    const t0 = Date.parse(firstX);
+    const sorted = deps.map((d) => ({ t: Date.parse(d.x), amount: d.amount })).sort((a, b) => a.t - b.t);
+    let cum = 0;
+    const out = [];
+    for (const d of sorted) {
+      if (d.t <= t0) { cum += d.amount; continue; }
+      if (!out.length) out.push({ x: firstX, y: cum });
+      const x = new Date(d.t).toISOString();
+      out.push({ x, y: cum });
+      cum += d.amount;
+      out.push({ x, y: cum });
+    }
+    if (!out.length) out.push({ x: firstX, y: cum });
+    const tail = out[out.length - 1].x;
+    out.push({ x: lastX > tail ? lastX : tail, y: cum });
+    return out;
+  }
+
   function fmtEur(v) {
     if (v == null) return "—";
     return "€ " + Number(v).toLocaleString("nl-NL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });

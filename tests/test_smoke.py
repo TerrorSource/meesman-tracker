@@ -361,3 +361,63 @@ def test_wait_detects_maintenance_fast():
 
     raised, elapsed = asyncio.run(run())
     assert raised is True and elapsed < 10
+
+
+def test_money_weighted_period_return(client):
+    """Modified Dietz: een storting halverwege telt voor de helft mee in de noemer."""
+    from datetime import datetime, timezone
+    from sqlalchemy import text
+    from app.core import engine
+    from app.store import period_return
+
+    utc = timezone.utc
+    with engine.begin() as conn:
+        for ts, acc, val in [("2019-12-31T12:00:00+00:00", "90000001", 1000.0),
+                             ("2020-12-31T12:00:00+00:00", "90000001", 2100.0),
+                             ("2020-03-02T12:00:00+00:00", "90000002", 500.0),
+                             ("2020-12-31T12:00:00+00:00", "90000002", 550.0)]:
+            conn.execute(text("INSERT INTO accounts_snapshot (ts, account_number, label, value_eur) "
+                              "VALUES (:t, :a, 'Test', :v)"), {"t": ts, "a": acc, "v": val})
+        for ts, acc, amt in [("2020-07-01T12:00:00+00:00", "90000001", 1000.0),   # halverwege het jaar
+                             ("2020-03-01T00:00:00+00:00", "90000002", 500.0)]:   # voor de eerste meting
+            conn.execute(text("INSERT INTO deposits (ts, account_number, label, amount_eur) "
+                              "VALUES (:t, :a, 'Test', :v)"), {"t": ts, "a": acc, "v": amt})
+    try:
+        start, end = datetime(2020, 1, 1, tzinfo=utc), datetime(2021, 1, 1, tzinfo=utc)
+
+        r = period_return(start, end, exclude={"90000002"})
+        assert r["begin"] == 1000.0 and r["flows"] == 1000.0 and r["end"] == 2100.0
+        assert abs(r["ret"] - 100.0) < 0.01
+        # simpel: 100 / 1000 = 10%; geldgewogen: 100 / (1000 + 1000 * ~0,5) = ~6,7%
+        assert 6.5 < r["pct"] < 6.8
+
+        # rekening die in maart begint: storting van voor de eerste meting telt niet dubbel
+        r2 = period_return(start, end, exclude={"90000001"})
+        assert r2["begin"] == 500.0 and r2["flows"] == 0.0 and abs(r2["ret"] - 50.0) < 0.01
+        assert 11.5 < r2["pct"] < 12.5        # 50 / (500 * ~0,83)
+
+        # een later toegevoegd historisch punt (hoger id, oudere ts) verstoort 'laatste waarde' niet
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO accounts_snapshot (ts, account_number, label, value_eur) "
+                              "VALUES ('2020-06-01T12:00:00+00:00', '90000001', 'Test', 1500.0)"))
+        assert period_return(start, end, exclude={"90000002"})["end"] == 2100.0
+
+        assert period_return(datetime(2010, 1, 1, tzinfo=utc), datetime(2011, 1, 1, tzinfo=utc)) is None
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM accounts_snapshot WHERE account_number IN ('90000001', '90000002')"))
+            conn.execute(text("DELETE FROM deposits WHERE account_number IN ('90000001', '90000002')"))
+
+
+def test_dashboard_payload_has_deposit_events_and_total_chart_code(client):
+    client.post("/deposits/add", data={"account_number": "22404586", "entry_date": "2026-02-10",
+                                       "amount_eur": "50,00", "note": "grafiek", "kind": "deposit"},
+                follow_redirects=False)
+    html = client.get("/").text
+    assert '"deposits": [' in html and '"amount": 50.0' in html
+    assert "geldgewogen" in html
+    js = client.get("/static/app.js").text
+    assert "function totalSeries" in js and "function depositSeries" in js and "Netto inleg" in js
+    import re as _re
+    for d_id in _re.findall(r'data-id="(\d+)"', client.get("/deposits").text):
+        client.post(f"/deposits/delete/{d_id}", follow_redirects=False)

@@ -132,3 +132,52 @@ def test_maintenance_page_detection():
     assert is_maintenance_page("<h1>We zijn even bezig...</h1>") is True
     assert is_maintenance_page("<title>Login | Meesman indexbeleggen</title><input id='login-username'>") is False
     assert is_maintenance_page("") is False
+
+
+class _Resp:
+    def __init__(self, status):
+        self.status_code, self.text = status, "body"
+
+
+_TG_CFG = {"telegram_bot_token_enc": "x", "telegram_chat_id_enc": "y"}
+
+
+def _patch_telegram(monkeypatch, outcomes):
+    """outcomes: lijst van statuscodes of Exceptions, een per poging."""
+    import app.telegram as tg
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append(url)
+        o = outcomes[len(calls) - 1]
+        if isinstance(o, Exception):
+            raise o
+        return _Resp(o)
+
+    monkeypatch.setattr(tg.requests, "post", fake_post)
+    monkeypatch.setattr(tg, "_credentials", lambda cfg: ("token", "chat"))
+    monkeypatch.setattr(tg, "_RETRY_DELAYS", (0, 0))
+    return tg, calls
+
+
+def test_telegram_retries_on_network_error_then_succeeds(monkeypatch):
+    import requests
+    tg, calls = _patch_telegram(monkeypatch, [requests.ConnectionError("hik"), _Resp(502).status_code, 200])
+    ok, info = tg.send_telegram(_TG_CFG, "hallo")
+    assert ok is True and info == "Sent" and len(calls) == 3
+
+
+def test_telegram_no_retry_on_client_error(monkeypatch):
+    tg, calls = _patch_telegram(monkeypatch, [401, 200, 200])
+    ok, info = tg.send_telegram(_TG_CFG, "hallo")
+    assert ok is False and "401" in info and len(calls) == 1
+
+
+def test_telegram_gives_up_after_three_attempts(monkeypatch):
+    import requests
+    tg, calls = _patch_telegram(monkeypatch, [requests.Timeout("t")] * 3)
+    ok, info = tg.send_telegram(_TG_CFG, "hallo")
+    assert ok is False and "Timeout" in info and len(calls) == 3
+    tg, calls = _patch_telegram(monkeypatch, [500, 503, 429])
+    ok, info = tg.send_telegram(_TG_CFG, "hallo")
+    assert ok is False and "429" in info and len(calls) == 3

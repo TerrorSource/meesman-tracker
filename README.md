@@ -13,7 +13,7 @@ A self-hosted Docker application that automatically logs into [mijn.meesman.nl](
 - **Scheduled refresh at a fixed local time** (default 07:30, optionally Mon–Sat or Mon–Fri) with catch-up after a (re)start and two automatic retries (30 and 90 min) after a failed scrape; interval mode as fallback
 - **Self-healing** — retries with a fresh browser context when a stale session blocks the login; restarts the container when Chromium itself can no longer start; recognises Meesman's maintenance page ("We zijn even bezig…") and simply retries later without touching the session or raising an alert
 - **Session keepalive** for manual-MFA mode (HTTP cookie check, full browser only every Nth tick); skipped entirely in TOTP mode
-- **Dashboard** with charts (1m / 3m / 1y / all), balance history, return per account, a configurable growth baseline date and a **return-per-calendar-year** table; individual data points can be deleted from the changes table; dark mode follows your system setting
+- **Dashboard** with charts (1m / 3m / 1y / all), balance history, return per account, a configurable growth baseline date, a **total-portfolio chart** with your net deposits as a second line, and a **return-per-calendar-year** table with a money-weighted percentage (Modified Dietz); individual data points can be deleted from the changes table; dark mode follows your system setting
 - **Account archiving** — closed accounts disappear from the dashboard, totals, API and notifications while their history is kept; you get a Telegram notice when a known account no longer appears at Meesman
 - **Deposit & withdrawal tracking** — add, edit and delete deposits and withdrawals; the net amount (deposits − withdrawals) separates your own money from actual investment returns
 - **Home Assistant REST API** — `/api/sensors` and `/deposits.json`
@@ -304,6 +304,8 @@ The app sends a message automatically on:
 
 Thresholds: under *Config → Meldingen* you can require a minimum total change in € and/or % before a balance message is sent (a new account is always announced), and set after how many consecutive failed refreshes the warning goes out.
 
+Sending is retried twice (after 2 and 5 seconds) on network errors and on HTTP 429/5xx, so a short network hiccup does not lose a message.
+
 Example message:
 ```
 📊 Meesman saldo update — 19-03-2026
@@ -322,7 +324,7 @@ Example message:
 
 - **Tests & lint:** `pip install -r requirements-dev.txt && ruff check app tests scripts && pytest -q tests/` — parser/formatting unit tests, smoke tests that boot the app with a temporary data directory and exercise every route, and an offline regression test of the account-table parser against `tests/fixtures/meesman_overview.html` (needs `playwright install --only-shell chromium`; skipped otherwise). Replace the fixture with an anonymised copy of your own `data/debug/step3_home.html` for maximum realism. The same suite runs in GitHub Actions on every pull request (so Dependabot PRs show a green or red merge button) and before every image build.
 - **Selector canary:** `.github/workflows/selector-canary.yml` opens the Meesman login page daily and fails (→ GitHub notification e-mail) when the login selectors from `app/config_store.py` are gone. It never logs in.
-- **Upgrading Playwright:** a new Playwright means a new Chromium. The image runs Python 3.12. Bump the version in `requirements.txt` *and* in the canary workflow, then verify locally (`docker build .`, start the container, and launch Chromium once inside it) before pushing. Dependabot is configured to only propose patch updates for Playwright for this reason, to keep the Python base image on 3.11, and to bundle the remaining updates into one grouped PR per week.
+- **Upgrading Playwright:** a new Playwright means a new Chromium. The image runs Python 3.12. Bump the version in `requirements.txt` *and* in the canary workflow, then verify locally (`docker build .`, start the container, and launch Chromium once inside it) before pushing. Dependabot is configured to only propose patch updates for Playwright for this reason, to keep the Python base image on 3.11, and to bundle the remaining updates into one grouped PR per month.
 - **Meesman API research (concluded):** the account overview is rendered server-side; there is no JSON API for balances, so DOM scraping stays. The only dynamic JSON calls are Umbraco `Messages/*` endpoints, which are now used for the inbox notifications and as an authenticated session ping. The capture can be re-enabled with `API_CAPTURE=1`.
 
 ---

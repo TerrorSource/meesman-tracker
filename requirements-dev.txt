@@ -1,5 +1,5 @@
 # Alleen nodig voor de tests en lint (CI en lokaal), niet in het runtime-image
 -r requirements.txt
-pytest==9.1.1
+pytest==9.2.0
 httpx==0.28.1
-ruff==0.17.2
+ruff==0.17.3

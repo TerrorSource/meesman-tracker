@@ -1,13 +1,38 @@
 """Telegram-notificaties: verzending en berichtopbouw."""
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
 
 from .core import LOCAL_TZ, decrypt_if_present, fmt_eur, fmt_eur_delta, fmt_pct
-from .store import account_labels, deposits_sum_between, period_begin_values, snapshot_values_at
+from .store import account_labels, period_begin_values, period_return, snapshot_values_at
+
+# Herkansingen bij tijdelijke fouten (netwerkfout, HTTP 429 of 5xx): wachttijd
+# in seconden voor poging 2 en 3. Een 4xx (fout token/chat-id) is definitief.
+_RETRY_DELAYS = (2, 5)
+
+
+def _post_with_retry(url: str, *, timeout: int, **kwargs) -> requests.Response:
+    """requests.post met herkansingen. Returnt het laatste antwoord, of raise't
+    de laatste netwerkfout als geen enkele poging een antwoord opleverde."""
+    last_resp: requests.Response | None = None
+    last_exc: Exception | None = None
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        try:
+            last_resp = requests.post(url, timeout=timeout, **kwargs)
+            last_exc = None
+            if last_resp.status_code != 429 and last_resp.status_code < 500:
+                return last_resp
+        except requests.RequestException as e:
+            last_exc = e
+        if attempt < len(_RETRY_DELAYS):
+            time.sleep(_RETRY_DELAYS[attempt])
+    if last_exc is not None:
+        raise last_exc
+    return last_resp
 
 _MAANDEN = ["januari", "februari", "maart", "april", "mei", "juni", "juli",
             "augustus", "september", "oktober", "november", "december"]
@@ -35,7 +60,7 @@ def send_telegram(cfg: dict, message: str) -> tuple[bool, str]:
         if not token or not chat_id:
             return False, "Token/chat_id missing"
 
-        r = requests.post(
+        r = _post_with_retry(
             f"https://api.telegram.org/bot{token}/sendMessage",
             data={"chat_id": chat_id, "text": message},
             timeout=20,
@@ -56,13 +81,13 @@ def send_telegram_photo(cfg: dict, photo: Path, caption: str) -> tuple[bool, str
         token, chat_id = _credentials(cfg)
         if not token or not chat_id:
             return False, "Token/chat_id missing"
-        with open(photo, "rb") as fh:
-            r = requests.post(
-                f"https://api.telegram.org/bot{token}/sendPhoto",
-                data={"chat_id": chat_id, "caption": caption[:1000]},
-                files={"photo": (photo.name, fh, "image/png")},
-                timeout=60,
-            )
+        data = Path(photo).read_bytes()   # bytes, zodat een herkansing opnieuw kan uploaden
+        r = _post_with_retry(
+            f"https://api.telegram.org/bot{token}/sendPhoto",
+            data={"chat_id": chat_id, "caption": caption[:1000]},
+            files={"photo": (photo.name, data, "image/png")},
+            timeout=60,
+        )
         if 200 <= r.status_code < 300:
             return True, "Sent"
         return False, f"HTTP {r.status_code}: {(r.text or '')[:300]}"
@@ -172,29 +197,28 @@ def build_messages_notification(messages: list[dict]) -> str | None:
 def build_period_summary(start: datetime, end: datetime, title: str,
                          exclude: set[str] | None = None) -> str | None:
     """
-    Overzicht over [start, end): begin- en eindwaarde, inleg, rendement
-    (mutatie minus inleg) per rekening en totaal, plus het rendement sinds
-    1 januari. None als er geen data is.
+    Overzicht over [start, end): begin- en eindwaarde, netto inleg en
+    rendement (geldgewogen %, zie store.period_return) voor het totaal, de
+    waardemutatie per rekening, plus het rendement sinds 1 januari.
+    None als er geen data is.
     """
     exclude    = exclude or set()
     end_vals   = {a: v for a, v in snapshot_values_at(end).items() if a not in exclude}
-    if not end_vals:
+    total      = period_return(start, end, exclude)
+    if not end_vals or not total:
         return None
     labels     = account_labels()
     begin_vals = period_begin_values(start)
 
-    total_end   = sum(end_vals.values())
-    total_begin = sum(begin_vals.get(a, v) for a, v in end_vals.items())
-    dep         = deposits_sum_between(start, end)
-    rend        = (total_end - total_begin) - dep
-    pct         = (rend / total_begin * 100) if total_begin else 0.0
+    def _pct(p) -> str:
+        return f" ({fmt_pct(p)})" if p is not None else ""
 
     lines = [title, "",
-             f"💰 Totaal:       {fmt_eur(total_end)}",
-             f"   Begin:        {fmt_eur(total_begin)}"]
-    if abs(dep) >= 0.01:
-        lines.append(f"   Netto inleg:  {fmt_eur_delta(dep)}")
-    lines.append(f"   Rendement:    {fmt_eur_delta(rend)} ({fmt_pct(pct)})")
+             f"💰 Totaal:       {fmt_eur(total['end'])}",
+             f"   Begin:        {fmt_eur(total['begin'])}"]
+    if abs(total["flows"]) >= 0.01:
+        lines.append(f"   Netto inleg:  {fmt_eur_delta(total['flows'])}")
+    lines.append(f"   Rendement:    {fmt_eur_delta(total['ret'])}{_pct(total['pct'])}")
     lines.append("")
 
     for acc in sorted(end_vals):
@@ -208,13 +232,10 @@ def build_period_summary(start: datetime, end: datetime, title: str,
     # Sinds 1 januari (van het jaar waarin de periode eindigt)
     start_year = end.astimezone(LOCAL_TZ).replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
     if start_year < start:
-        y_begin = period_begin_values(start_year)
-        total_y_begin = sum(y_begin.get(a, v) for a, v in end_vals.items())
-        dep_y  = deposits_sum_between(start_year, end)
-        rend_y = (total_end - total_y_begin) - dep_y
-        pct_y  = (rend_y / total_y_begin * 100) if total_y_begin else 0.0
-        lines.append("")
-        lines.append(f"📆 Sinds 1 januari: {fmt_eur_delta(rend_y)} ({fmt_pct(pct_y)}) rendement na inleg")
+        ytd = period_return(start_year, end, exclude)
+        if ytd:
+            lines.append("")
+            lines.append(f"📆 Sinds 1 januari: {fmt_eur_delta(ytd['ret'])}{_pct(ytd['pct'])} rendement na inleg")
 
     return "\n".join(lines)
 

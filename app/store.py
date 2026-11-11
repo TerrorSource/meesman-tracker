@@ -183,12 +183,11 @@ def snapshot_values_at(dt: datetime) -> dict[str, float]:
     iso = dt.astimezone(timezone.utc).isoformat()
     with engine.begin() as conn:
         rows = conn.execute(text("""
-            SELECT account_number, value_eur
-            FROM accounts_snapshot
-            WHERE id IN (
-                SELECT MAX(id) FROM accounts_snapshot
-                WHERE ts <= :ts GROUP BY account_number
-            )
+            SELECT s.account_number, s.value_eur
+            FROM accounts_snapshot s
+            JOIN (SELECT account_number, MAX(ts) AS t FROM accounts_snapshot
+                  WHERE ts <= :ts GROUP BY account_number) m
+              ON m.account_number = s.account_number AND m.t = s.ts
         """), {"ts": iso}).mappings().all()
     return {r["account_number"]: to_float(r["value_eur"]) for r in rows}
 
@@ -198,30 +197,38 @@ def snapshot_values_first_from(dt: datetime) -> dict[str, float]:
     iso = dt.astimezone(timezone.utc).isoformat()
     with engine.begin() as conn:
         rows = conn.execute(text("""
-            SELECT account_number, value_eur
-            FROM accounts_snapshot
-            WHERE id IN (
-                SELECT MIN(id) FROM accounts_snapshot
-                WHERE ts >= :ts GROUP BY account_number
-            )
+            SELECT s.account_number, s.value_eur
+            FROM accounts_snapshot s
+            JOIN (SELECT account_number, MIN(ts) AS t FROM accounts_snapshot
+                  WHERE ts >= :ts GROUP BY account_number) m
+              ON m.account_number = s.account_number AND m.t = s.ts
         """), {"ts": iso}).mappings().all()
     return {r["account_number"]: to_float(r["value_eur"]) for r in rows}
 
 
-def snapshot_first_between(start: datetime, end: datetime) -> dict[str, float]:
-    """Eerste waarde per rekening binnen [start, end)."""
+def _parse_ts(s: str) -> datetime:
+    dt = datetime.fromisoformat(s)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def first_snapshots_between(start: datetime, end: datetime) -> dict[str, tuple[datetime, float]]:
+    """Eerste meting (tijdstip, waarde) per rekening binnen [start, end)."""
     a = start.astimezone(timezone.utc).isoformat()
     b = end.astimezone(timezone.utc).isoformat()
     with engine.begin() as conn:
         rows = conn.execute(text("""
-            SELECT account_number, value_eur
-            FROM accounts_snapshot
-            WHERE id IN (
-                SELECT MIN(id) FROM accounts_snapshot
-                WHERE ts >= :a AND ts < :b GROUP BY account_number
-            )
+            SELECT s.account_number, s.value_eur, s.ts
+            FROM accounts_snapshot s
+            JOIN (SELECT account_number, MIN(ts) AS t FROM accounts_snapshot
+                  WHERE ts >= :a AND ts < :b GROUP BY account_number) m
+              ON m.account_number = s.account_number AND m.t = s.ts
         """), {"a": a, "b": b}).mappings().all()
-    return {r["account_number"]: to_float(r["value_eur"]) for r in rows}
+    return {r["account_number"]: (_parse_ts(r["ts"]), to_float(r["value_eur"])) for r in rows}
+
+
+def snapshot_first_between(start: datetime, end: datetime) -> dict[str, float]:
+    """Eerste waarde per rekening binnen [start, end)."""
+    return {a: v for a, (_t, v) in first_snapshots_between(start, end).items()}
 
 
 def period_begin_values(period_start: datetime, period_end: datetime | None = None) -> dict[str, float]:
@@ -336,11 +343,86 @@ def recent_meesman_messages(limit: int = 10) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Geldgewogen rendement over een periode (Modified Dietz)
+# ---------------------------------------------------------------------------
+def _deposit_rows_between(start: datetime, end: datetime) -> list[tuple[str, datetime, float]]:
+    a = start.astimezone(timezone.utc).isoformat()
+    b = end.astimezone(timezone.utc).isoformat()
+    with engine.begin() as conn:
+        rows = conn.execute(text(
+            "SELECT account_number, ts, amount_eur FROM deposits WHERE ts >= :a AND ts < :b ORDER BY ts"
+        ), {"a": a, "b": b}).all()
+    return [(r[0], _parse_ts(r[1]), to_float(r[2])) for r in rows]
+
+
+def period_return(start: datetime, end: datetime, exclude: set[str] | None = None,
+                  now: datetime | None = None) -> dict | None:
+    """
+    Rendement over [start, end) voor alle (niet-uitgesloten) rekeningen samen.
+
+    - rendement (EUR) = eindwaarde - beginwaarde - netto inleg (stortingen - opnames)
+    - percentage      = geldgewogen (Modified Dietz): het rendement gedeeld door het
+      gemiddeld geinvesteerde vermogen. Elke storting/opname telt mee naar rato van
+      de tijd dat het geld in de periode belegd was. Een storting vlak voor het
+      einde drukt het percentage dus nauwelijks; een simpele deling door de
+      beginwaarde zou het rendement dan overschatten.
+
+    Een rekening zonder meting voor `start` begint bij haar eerste meting in de
+    periode; die beginwaarde weegt mee vanaf dat moment, en stortingen van voor
+    die eerste meting tellen niet nogmaals mee (ze zitten al in die waarde).
+
+    Returnt {begin, flows, end, ret, pct} of None als er geen data is.
+    `pct` is None als het gemiddeld geinvesteerde vermogen niet positief is.
+    """
+    exclude = exclude or set()
+    now = now or datetime.now(timezone.utc)
+    eff_end = min(end, now)                       # lopende periode: tot nu
+    span = (eff_end - start).total_seconds()
+    end_vals = {a: v for a, v in snapshot_values_at(end).items() if a not in exclude}
+    if not end_vals or span <= 0:
+        return None
+
+    before   = snapshot_values_at(start)
+    first_in = first_snapshots_between(start, end)
+
+    def weight(t: datetime) -> float:
+        return min(1.0, max(0.0, (eff_end - t).total_seconds() / span))
+
+    begin_total = end_total = weighted = 0.0
+    since: dict[str, datetime] = {}
+    for acc, v_end in end_vals.items():
+        if acc in before:
+            b, t0 = before[acc], start
+        elif acc in first_in:
+            t0, b = first_in[acc]
+        else:
+            continue
+        since[acc] = t0
+        begin_total += b
+        end_total   += v_end
+        weighted    += b * weight(t0)
+    if not since:
+        return None
+
+    flows = 0.0
+    for acc, ts, amt in _deposit_rows_between(start, end):
+        t0 = since.get(acc)
+        if t0 is None or (t0 > start and ts <= t0):
+            continue
+        flows    += amt
+        weighted += amt * weight(ts)
+
+    ret = end_total - begin_total - flows
+    pct = (ret / weighted * 100) if weighted > 0.005 else None
+    return {"begin": begin_total, "flows": flows, "end": end_total, "ret": ret, "pct": pct}
+
+
+# ---------------------------------------------------------------------------
 # Rendement per kalenderjaar
 # ---------------------------------------------------------------------------
 def yearly_returns(exclude: set[str] | None = None) -> list[dict]:
-    """Per kalenderjaar: beginwaarde, inleg, eindwaarde en rendement (€ en %).
-    Het lopende jaar is 'partial' (eindwaarde = laatste meting)."""
+    """Per kalenderjaar: beginwaarde, netto inleg, eindwaarde en rendement
+    (EUR en geldgewogen %). Het lopende jaar is 'partial' (tot nu)."""
     exclude = exclude or set()
     with engine.begin() as conn:
         row = conn.execute(text("SELECT MIN(ts), MAX(ts) FROM accounts_snapshot")).first()
@@ -353,28 +435,17 @@ def yearly_returns(exclude: set[str] | None = None) -> list[dict]:
     out = []
 
     for year in range(first_year, last_year + 1):
-        start = datetime(year, 1, 1, tzinfo=LOCAL_TZ)
-        end   = datetime(year + 1, 1, 1, tzinfo=LOCAL_TZ)
-
-        end_vals   = {a: v for a, v in snapshot_values_at(end).items() if a not in exclude}
-        begin_vals = {a: v for a, v in period_begin_values(start, end).items() if a in end_vals}
-        if not end_vals:
+        r = period_return(datetime(year, 1, 1, tzinfo=LOCAL_TZ),
+                          datetime(year + 1, 1, 1, tzinfo=LOCAL_TZ), exclude)
+        if not r:
             continue
-
-        begin_total = sum(begin_vals.values())
-        end_total   = sum(v for a, v in end_vals.items() if a in begin_vals)
-        deposits    = deposits_sum_between(start, end)
-        ret         = end_total - begin_total - deposits
-        base        = begin_total if begin_total else deposits
-        pct         = (ret / base * 100) if base else 0.0
-
         out.append({
             "year":     year,
-            "begin":    begin_total,
-            "deposits": deposits,
-            "end":      end_total,
-            "ret":      ret,
-            "pct":      pct,
+            "begin":    r["begin"],
+            "deposits": r["flows"],
+            "end":      r["end"],
+            "ret":      r["ret"],
+            "pct":      r["pct"],          # geldgewogen; None als niet te bepalen
             "partial":  year == this_year,
         })
     return out
